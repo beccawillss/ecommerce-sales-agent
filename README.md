@@ -1,6 +1,12 @@
 # Sales Agent
 
-Sales Agent is the foundation for a conversational sales concierge for a fictional outdoor retailer. Phase 0 provides only a FastAPI application with a health endpoint and an automated Python development toolchain. Commerce features, AI integration, tracing, and a frontend are not implemented yet.
+Sales Agent is a conversational sales concierge for a fictional outdoor retailer. Phase 1 provides a FastAPI health endpoint and a deterministic, JSON-backed commerce layer for product search, exact variant inventory, and promotion validation. AI integration, chat and trace APIs, pricing application, and a frontend are not implemented yet.
+
+## Current commerce capabilities
+
+The application code can load and validate the fictional catalogue and promotions in `data/`, retrieve products by stable ID, filter products using typed constraints, check exact colour/size stock, and validate promotion codes. Commerce operations are application services only in Phase 1; they are not exposed as HTTP endpoints.
+
+Search criteria are combined with AND semantics. Text and tag comparisons are case-insensitive exact matches, and results are ordered by price followed by product ID.
 
 ## Prerequisites
 
@@ -47,4 +53,3 @@ Run static type checking:
 ```bash
 uv run mypy src
 ```
-

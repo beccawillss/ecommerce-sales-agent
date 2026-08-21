@@ -1,0 +1,14 @@
+{
+  "promotions": [
+    {
+      "code": "WELCOME10",
+      "discount_percent": "10",
+      "active": true
+    },
+    {
+      "code": "SUMMER20",
+      "discount_percent": "20",
+      "active": false
+    }
+  ]
+}

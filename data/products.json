@@ -1,0 +1,305 @@
+{
+  "products": [
+    {
+      "id": "JKT-001",
+      "name": "Apex Alpine Waterproof Jacket",
+      "category": "jacket",
+      "price": "145.00",
+      "currency": "GBP",
+      "product_url": "/products/apex-alpine",
+      "activities": ["hiking", "trekking"],
+      "weather": ["heavy-rain", "wind", "cold"],
+      "features": ["waterproof", "breathable", "hooded"],
+      "waterproof_rating": "high",
+      "warmth": "shell",
+      "season": ["autumn", "winter", "spring"],
+      "variants": [
+        {"colour": "Ocean Blue", "size": "M", "stock": 4},
+        {"colour": "Black", "size": "M", "stock": 0}
+      ]
+    },
+    {
+      "id": "JKT-002",
+      "name": "Velo Lite Windbreaker",
+      "category": "jacket",
+      "price": "75.00",
+      "currency": "GBP",
+      "product_url": "/products/velo-lite",
+      "activities": ["cycling", "running"],
+      "weather": ["wind", "light-rain"],
+      "features": ["lightweight", "packable", "water-resistant"],
+      "waterproof_rating": "water-resistant",
+      "warmth": "light",
+      "season": ["spring", "summer"],
+      "variants": [
+        {"colour": "Neon Yellow", "size": "M", "stock": 0},
+        {"colour": "Charcoal", "size": "M", "stock": 0}
+      ]
+    },
+    {
+      "id": "JKT-003",
+      "name": "Ridgeway Rain Shell",
+      "category": "jacket",
+      "price": "110.00",
+      "currency": "GBP",
+      "product_url": "/products/ridgeway-rain-shell",
+      "activities": ["hiking", "walking"],
+      "weather": ["moderate-rain", "wind"],
+      "features": ["waterproof", "lightweight", "hooded"],
+      "waterproof_rating": "moderate",
+      "warmth": "shell",
+      "season": ["spring", "summer", "autumn"],
+      "variants": [
+        {"colour": "Ocean Blue", "size": "M", "stock": 3}
+      ]
+    },
+    {
+      "id": "JKT-004",
+      "name": "StormPro Expedition Shell",
+      "category": "jacket",
+      "price": "195.00",
+      "currency": "GBP",
+      "product_url": "/products/stormpro-expedition",
+      "activities": ["hiking", "trekking", "mountaineering"],
+      "weather": ["heavy-rain", "wind", "cold"],
+      "features": ["waterproof", "breathable", "technical-shell"],
+      "waterproof_rating": "high",
+      "warmth": "shell",
+      "season": ["autumn", "winter", "spring"],
+      "variants": [
+        {"colour": "Black", "size": "M", "stock": 2}
+      ]
+    },
+    {
+      "id": "JKT-005",
+      "name": "Trail Breeze Wind Shell",
+      "category": "jacket",
+      "price": "85.00",
+      "currency": "GBP",
+      "product_url": "/products/trail-breeze",
+      "activities": ["cycling", "running"],
+      "weather": ["wind", "light-rain"],
+      "features": ["lightweight", "water-resistant", "packable"],
+      "waterproof_rating": "water-resistant",
+      "warmth": "light",
+      "season": ["spring", "summer"],
+      "variants": [
+        {"colour": "Charcoal", "size": "M", "stock": 6}
+      ]
+    },
+    {
+      "id": "INS-001",
+      "name": "Cairn Insulated Jacket",
+      "category": "jacket",
+      "price": "130.00",
+      "currency": "GBP",
+      "product_url": "/products/cairn-insulated",
+      "activities": ["walking", "camping"],
+      "weather": ["cold", "dry"],
+      "features": ["insulated", "warm", "wind-resistant"],
+      "waterproof_rating": "none",
+      "warmth": "high",
+      "season": ["autumn", "winter"],
+      "variants": [
+        {"colour": "Navy", "size": "M", "stock": 5}
+      ]
+    },
+    {
+      "id": "SOCK-001",
+      "name": "Trek Merino Socks",
+      "category": "socks",
+      "price": "18.00",
+      "currency": "GBP",
+      "product_url": "/products/trek-merino-socks",
+      "activities": ["hiking", "walking"],
+      "weather": ["cold", "dry"],
+      "features": ["merino", "warm", "moisture-wicking"],
+      "waterproof_rating": "none",
+      "warmth": "medium",
+      "season": ["autumn", "winter", "spring"],
+      "variants": [
+        {"colour": "Grey", "size": "M", "stock": 10}
+      ]
+    },
+    {
+      "id": "LAY-001",
+      "name": "Moorland Thermal Base Layer",
+      "category": "base-layer",
+      "price": "42.00",
+      "currency": "GBP",
+      "product_url": "/products/moorland-thermal-base",
+      "activities": ["hiking", "skiing"],
+      "weather": ["cold", "dry"],
+      "features": ["thermal", "moisture-wicking", "stretch"],
+      "waterproof_rating": "none",
+      "warmth": "medium",
+      "season": ["autumn", "winter"],
+      "variants": [
+        {"colour": "Charcoal", "size": "M", "stock": 8},
+        {"colour": "Charcoal", "size": "L", "stock": 5}
+      ]
+    },
+    {
+      "id": "LAY-002",
+      "name": "Pine Ridge Fleece Mid Layer",
+      "category": "mid-layer",
+      "price": "68.00",
+      "currency": "GBP",
+      "product_url": "/products/pine-ridge-fleece",
+      "activities": ["walking", "camping"],
+      "weather": ["cool", "dry"],
+      "features": ["fleece", "breathable", "quick-drying"],
+      "waterproof_rating": "none",
+      "warmth": "medium",
+      "season": ["spring", "autumn", "winter"],
+      "variants": [
+        {"colour": "Forest Green", "size": "M", "stock": 4},
+        {"colour": "Navy", "size": "M", "stock": 3}
+      ]
+    },
+    {
+      "id": "TRS-001",
+      "name": "Granite Trail Trousers",
+      "category": "trousers",
+      "price": "72.00",
+      "currency": "GBP",
+      "product_url": "/products/granite-trail-trousers",
+      "activities": ["hiking", "walking"],
+      "weather": ["dry", "wind"],
+      "features": ["durable", "stretch", "quick-drying"],
+      "waterproof_rating": "none",
+      "warmth": "light",
+      "season": ["spring", "summer", "autumn"],
+      "variants": [
+        {"colour": "Slate", "size": "M", "stock": 7},
+        {"colour": "Slate", "size": "L", "stock": 2}
+      ]
+    },
+    {
+      "id": "TRS-002",
+      "name": "Fenland Waterproof Overtrousers",
+      "category": "trousers",
+      "price": "65.00",
+      "currency": "GBP",
+      "product_url": "/products/fenland-overtrousers",
+      "activities": ["walking", "trekking"],
+      "weather": ["heavy-rain", "wind"],
+      "features": ["waterproof", "packable", "side-zips"],
+      "waterproof_rating": "high",
+      "warmth": "shell",
+      "season": ["spring", "autumn", "winter"],
+      "variants": [
+        {"colour": "Black", "size": "M", "stock": 5},
+        {"colour": "Black", "size": "L", "stock": 4}
+      ]
+    },
+    {
+      "id": "SOCK-002",
+      "name": "Skylark Summer Trail Socks",
+      "category": "socks",
+      "price": "14.00",
+      "currency": "GBP",
+      "product_url": "/products/skylark-trail-socks",
+      "activities": ["running", "walking"],
+      "weather": ["warm", "dry"],
+      "features": ["lightweight", "breathable", "moisture-wicking"],
+      "waterproof_rating": "none",
+      "warmth": "light",
+      "season": ["spring", "summer"],
+      "variants": [
+        {"colour": "Stone", "size": "M", "stock": 12},
+        {"colour": "Stone", "size": "L", "stock": 9}
+      ]
+    },
+    {
+      "id": "ACC-001",
+      "name": "Summit Rib Beanie",
+      "category": "accessory",
+      "price": "22.00",
+      "currency": "GBP",
+      "product_url": "/products/summit-rib-beanie",
+      "activities": ["walking", "camping"],
+      "weather": ["cold", "dry"],
+      "features": ["warm", "soft", "recycled-fibre"],
+      "waterproof_rating": "none",
+      "warmth": "medium",
+      "season": ["autumn", "winter"],
+      "variants": [
+        {"colour": "Rust", "size": "One Size", "stock": 6},
+        {"colour": "Navy", "size": "One Size", "stock": 4}
+      ]
+    },
+    {
+      "id": "ACC-002",
+      "name": "Northwind Trail Gloves",
+      "category": "accessory",
+      "price": "35.00",
+      "currency": "GBP",
+      "product_url": "/products/northwind-gloves",
+      "activities": ["hiking", "running"],
+      "weather": ["cold", "wind"],
+      "features": ["wind-resistant", "touchscreen-compatible", "grip-palm"],
+      "waterproof_rating": "water-resistant",
+      "warmth": "medium",
+      "season": ["autumn", "winter"],
+      "variants": [
+        {"colour": "Black", "size": "M", "stock": 3},
+        {"colour": "Black", "size": "L", "stock": 3}
+      ]
+    },
+    {
+      "id": "ACC-003",
+      "name": "Tern Roll-Top Day Pack",
+      "category": "accessory",
+      "price": "55.00",
+      "currency": "GBP",
+      "product_url": "/products/tern-roll-top-pack",
+      "activities": ["walking", "paddling"],
+      "weather": ["moderate-rain", "spray"],
+      "features": ["roll-top", "water-resistant", "reflective"],
+      "waterproof_rating": "water-resistant",
+      "warmth": "none",
+      "season": ["spring", "summer", "autumn"],
+      "variants": [
+        {"colour": "Moss", "size": "20L", "stock": 5},
+        {"colour": "Black", "size": "20L", "stock": 2}
+      ]
+    },
+    {
+      "id": "BOT-001",
+      "name": "Cragstep Leather Hiking Boots",
+      "category": "footwear",
+      "price": "120.00",
+      "currency": "GBP",
+      "product_url": "/products/cragstep-hiking-boots",
+      "activities": ["hiking", "trekking"],
+      "weather": ["cold", "wet-ground"],
+      "features": ["supportive", "grippy", "leather"],
+      "waterproof_rating": "moderate",
+      "warmth": "medium",
+      "season": ["autumn", "winter", "spring"],
+      "variants": [
+        {"colour": "Brown", "size": "8", "stock": 4},
+        {"colour": "Brown", "size": "9", "stock": 3}
+      ]
+    },
+    {
+      "id": "VST-001",
+      "name": "Heather Ridge Softshell Gilet",
+      "category": "vest",
+      "price": "90.00",
+      "currency": "GBP",
+      "product_url": "/products/heather-ridge-gilet",
+      "activities": ["hiking", "walking"],
+      "weather": ["cool", "wind"],
+      "features": ["wind-resistant", "stretch", "breathable"],
+      "waterproof_rating": "water-resistant",
+      "warmth": "light",
+      "season": ["spring", "autumn"],
+      "variants": [
+        {"colour": "Berry", "size": "M", "stock": 4},
+        {"colour": "Navy", "size": "M", "stock": 2}
+      ]
+    }
+  ]
+}

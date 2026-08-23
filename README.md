@@ -1,6 +1,10 @@
 # Sales Agent
 
-Sales Agent is a conversational sales concierge for a fictional outdoor retailer. Phase 2 provides the V1 HTTP contract using a deterministic chat stub, alongside the JSON-backed commerce layer from Phase 1. AI integration, real recommendations, conversation history, pricing application, and a frontend are not implemented yet.
+Sales Agent is a conversational sales concierge for a fictional outdoor retailer. Phase 3 adds four validated, read-only agent-tool adapters over the deterministic commerce layer while preserving the Phase 2 HTTP stub. AI integration, real recommendations, conversation history, pricing application, and a frontend are not implemented yet.
+
+## Current agent-tool capabilities
+
+The internal tool registry exposes `search_products`, `get_product`, `check_inventory`, and `validate_discount`. Calls are validated and dispatched through an explicit allowlist to the existing commerce service. Tool results use structured envelopes and serialize monetary values as exact decimal strings. These tools are not HTTP endpoints and are not invoked by the chat stub yet.
 
 ## Current API behavior
 

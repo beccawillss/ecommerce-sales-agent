@@ -1,6 +1,14 @@
 # Sales Agent
 
-Sales Agent is a conversational sales concierge for a fictional outdoor retailer. Phase 1 provides a FastAPI health endpoint and a deterministic, JSON-backed commerce layer for product search, exact variant inventory, and promotion validation. AI integration, chat and trace APIs, pricing application, and a frontend are not implemented yet.
+Sales Agent is a conversational sales concierge for a fictional outdoor retailer. Phase 2 provides the V1 HTTP contract using a deterministic chat stub, alongside the JSON-backed commerce layer from Phase 1. AI integration, real recommendations, conversation history, pricing application, and a frontend are not implemented yet.
+
+## Current API behavior
+
+- `GET /health` reports application health.
+- `POST /api/v1/chat` creates or preserves a session ID, creates a trace ID, and returns a deterministic placeholder response with no recommendations or pricing.
+- `GET /api/v1/traces/{trace_id}` returns the in-memory trace for one chat turn when evaluation traces are enabled.
+
+The stub does not invoke the commerce layer or any model. Trace and session-turn state last only for the lifetime of the application process.
 
 ## Current commerce capabilities
 
@@ -21,7 +29,7 @@ Install the project and development dependencies from the repository root:
 uv sync
 ```
 
-No runtime secrets or environment variables are required in Phase 0.
+No runtime secrets are required. Evaluation traces are enabled by default for local development. Set `SALESAGENT_ENABLE_EVAL_TRACES=false` to remove the trace endpoint in production-style deployments.
 
 ## Run the application
 
@@ -31,7 +39,7 @@ Start the FastAPI development server:
 uv run uvicorn salesagent.main:app --reload
 ```
 
-The health endpoint is available at `http://127.0.0.1:8000/health`.
+The health and V1 API endpoints are available below `http://127.0.0.1:8000/`.
 
 ## Development checks
 

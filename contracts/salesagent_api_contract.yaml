@@ -68,6 +68,7 @@ components:
           type:
           - string
           - 'null'
+          minLength: 1
           description: Omit or send null to create a new session.
         message:
           type: string

@@ -1,6 +1,6 @@
 Project purpose
 
-ShopBuddy is a V1 AI-powered e-commerce sales concierge for a fictional outdoor retailer.
+Sales Agent is a V1 AI-powered e-commerce sales concierge for a fictional outdoor retailer.
 
 The project demonstrates:
 
@@ -28,7 +28,7 @@ Treat these as authoritative when present:
 
 docs/product-spec.md — product behavior, V1 scope, non-goals, and acceptance criteria.
 
-contracts/shopbuddy_api_contract.yaml — HTTP request/response and trace schemas.
+contracts/salesagent_api_contract.yaml — HTTP request/response and trace schemas.
 
 data/products.json — authoritative product facts, prices, URLs, variants, and stock.
 
@@ -116,7 +116,7 @@ Do not add another model provider unless a task explicitly requires it.
 
 API and testability contract
 
-The V1 API contract is defined in contracts/shopbuddy_api_contract.yaml.
+The V1 API contract is defined in contracts/salesagent_api_contract.yaml.
 
 Primary endpoints:
 

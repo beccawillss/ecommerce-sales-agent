@@ -95,6 +95,17 @@ def test_search_products_empty_result_is_successful(
     assert data == {"products": [], "count": 0}
 
 
+def test_search_products_null_maximum_price_means_no_limit(
+    dispatcher: ToolDispatcher,
+) -> None:
+    with_null = dispatcher.dispatch("search_products", {"maximum_price": None})
+    without_filter = dispatcher.dispatch("search_products", {})
+
+    assert with_null.arguments is not None
+    assert with_null.arguments["maximum_price"] is None
+    assert successful_data(with_null) == successful_data(without_filter)
+
+
 def test_search_products_preserves_phase_one_order(dispatcher: ToolDispatcher) -> None:
     result = dispatcher.dispatch(
         "search_products",
@@ -220,6 +231,8 @@ def test_execution_failure_is_safe_and_does_not_expose_exception_text() -> None:
         ("check_inventory", {"product_id": "JKT-001", "size": "M"}),
         ("validate_discount", {"code": "WELCOME10", "active": True}),
         ("search_products", {"maximum_price": {"amount": "160.00"}}),
+        ("search_products", {"maximum_price": "not-a-price"}),
+        ("search_products", {"maximum_price": "-0.01"}),
         ("search_products", {"unknown_filter": "value"}),
     ],
 )

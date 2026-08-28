@@ -1,6 +1,5 @@
-"""Deterministic application services."""
+"""Application service package.
 
-from salesagent.services.chat import ChatService
-from salesagent.services.commerce import CommerceService
-
-__all__ = ["ChatService", "CommerceService"]
+Services are imported from their concrete modules so commerce remains independent
+from agent orchestration and trace assembly.
+"""

@@ -17,6 +17,14 @@ ToolName = Literal[
     "search_products", "get_product", "check_inventory", "validate_discount"
 ]
 
+_SEARCH_MAXIMUM_PRICE_SCHEMA: dict[str, object] = {
+    "type": ["string", "null"],
+    "description": (
+        "Maximum price in GBP as a decimal amount, for example '160.00'. "
+        "Use null when there is no price limit."
+    ),
+}
+
 
 @dataclass(frozen=True, slots=True)
 class ToolSpec:
@@ -43,7 +51,7 @@ TOOL_REGISTRY: tuple[ToolSpec, ...] = (
         description=(
             "Read-only lookup of authoritative product facts by stable catalogue "
             "product ID, including price, attributes, variants, and product URL. "
-            "Use when the product ID is already known.",
+            "Use when the product ID is already known."
         ),
         argument_model=GetProductArguments,
     ),
@@ -109,5 +117,8 @@ def _strict_parameters(argument_model: type[BaseModel]) -> dict[str, object]:
         if isinstance(property_schema, dict):
             property_schema.pop("default", None)
             property_schema.pop("title", None)
+
+    if argument_model is SearchProductsArguments:
+        properties["maximum_price"] = deepcopy(_SEARCH_MAXIMUM_PRICE_SCHEMA)
 
     return cast(dict[str, object], schema)

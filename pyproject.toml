@@ -6,6 +6,7 @@ readme = "README.md"
 requires-python = ">=3.13,<3.14"
 dependencies = [
     "fastapi>=0.116,<1.0",
+    "openai>=3.3.1,<4.0",
     "pydantic>=2.11,<3.0",
     "uvicorn>=0.35,<1.0",
 ]

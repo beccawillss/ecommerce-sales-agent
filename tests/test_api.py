@@ -8,17 +8,43 @@ from uuid import UUID
 import pytest
 from fastapi.testclient import TestClient
 
+from salesagent.agent.responses_client import (
+    FunctionCall,
+    ModelResponse,
+    ResponsesClientError,
+    ResponseUsage,
+)
 from salesagent.config import Settings
 from salesagent.main import create_app
+from tests.fakes import ScriptedResponsesClient
+
+
+def direct_response(
+    index: int = 1, message: str = "How can I help with your kit?"
+) -> ModelResponse:
+    return ModelResponse(
+        response_id=f"resp-direct-{index}",
+        output_text=message,
+        function_calls=(),
+        usage=ResponseUsage(input_tokens=4, output_tokens=6, total_tokens=10),
+        status="completed",
+    )
 
 
 @pytest.fixture
 def client() -> Iterator[TestClient]:
-    with TestClient(create_app(Settings(enable_eval_traces=True))) as test_client:
+    model_client = ScriptedResponsesClient(
+        [direct_response(index) for index in range(1, 20)]
+    )
+    application = create_app(
+        Settings(enable_eval_traces=True),
+        responses_client=model_client,
+    )
+    with TestClient(application) as test_client:
         yield test_client
 
 
-def test_new_session_returns_contract_shaped_stub_response(
+def test_new_session_returns_contract_shaped_model_response(
     client: TestClient,
 ) -> None:
     response = client.post(
@@ -33,7 +59,7 @@ def test_new_session_returns_contract_shaped_stub_response(
     assert body == {
         "session_id": body["session_id"],
         "trace_id": body["trace_id"],
-        "message": "Sales Agent is not configured yet.",
+        "message": "How can I help with your kit?",
         "recommendations": [],
         "promotion": None,
         "pricing": None,
@@ -114,8 +140,8 @@ def test_chat_trace_can_be_retrieved_by_returned_id(client: TestClient) -> None:
     assert trace["session_id"] == "trace-session"
     assert trace["turn_index"] == 1
     assert trace["user_message"] == "Keep this safe"
-    assert trace["model"] == "stub"
-    assert trace["prompt_version"] == "none"
+    assert trace["model"] == "gpt-5.6-terra"
+    assert trace["prompt_version"] == "phase4-v1"
     assert trace["resolved_constraints"] == {
         "category": None,
         "activity": None,
@@ -133,9 +159,9 @@ def test_chat_trace_can_be_retrieved_by_returned_id(client: TestClient) -> None:
     assert trace["promotion"] is None
     assert trace["pricing"] is None
     assert trace["token_usage"] == {
-        "input_tokens": 0,
-        "output_tokens": 0,
-        "total_tokens": 0,
+        "input_tokens": 4,
+        "output_tokens": 6,
+        "total_tokens": 10,
     }
     assert trace["errors"] == []
     assert trace["latency_ms"] >= 0
@@ -185,7 +211,8 @@ def test_disabled_trace_route_does_not_expose_trace_contents(
 ) -> None:
     monkeypatch.setenv("SALESAGENT_ENABLE_EVAL_TRACES", "false")
 
-    with TestClient(create_app()) as disabled_client:
+    model_client = ScriptedResponsesClient([direct_response()])
+    with TestClient(create_app(responses_client=model_client)) as disabled_client:
         chat_response = disabled_client.post(
             "/api/v1/chat", json={"message": "Private turn"}
         ).json()
@@ -237,3 +264,120 @@ def test_openapi_exposes_contract_paths_and_chat_limits(client: TestClient) -> N
         ]["type"]
         == "number"
     )
+
+
+def test_chat_endpoint_runs_real_dispatcher_tool_loop_offline() -> None:
+    model_client = ScriptedResponsesClient(
+        [
+            ModelResponse(
+                response_id="resp-search",
+                output_text="",
+                function_calls=(
+                    FunctionCall(
+                        call_id="call-search",
+                        name="search_products",
+                        arguments_json='{"activity":"cycling"}',
+                    ),
+                ),
+                usage=ResponseUsage(input_tokens=5, output_tokens=3, total_tokens=8),
+                status="completed",
+            ),
+            ModelResponse(
+                response_id="resp-final",
+                output_text="I found verified cycling options.",
+                function_calls=(),
+                usage=ResponseUsage(input_tokens=7, output_tokens=4, total_tokens=11),
+                status="completed",
+            ),
+        ]
+    )
+    application = create_app(
+        Settings(enable_eval_traces=True), responses_client=model_client
+    )
+
+    with TestClient(application) as test_client:
+        response = test_client.post(
+            "/api/v1/chat", json={"message": "Find a cycling jacket"}
+        )
+        body = response.json()
+        trace = test_client.get(f"/api/v1/traces/{body['trace_id']}").json()
+
+    assert response.status_code == 200
+    assert body["message"] == "I found verified cycling options."
+    assert body["recommendations"] == []
+    assert body["promotion"] is None
+    assert body["pricing"] is None
+    assert trace["token_usage"] == {
+        "input_tokens": 12,
+        "output_tokens": 7,
+        "total_tokens": 19,
+    }
+    assert trace["tool_calls"][0]["sequence"] == 1
+    assert trace["tool_calls"][0]["tool_call_id"] == "call-search"
+    assert trace["tool_calls"][0]["tool_name"] == "search_products"
+    assert trace["tool_calls"][0]["arguments"] == {
+        "category": None,
+        "activity": "cycling",
+        "weather": [],
+        "features": [],
+        "maximum_price": None,
+        "colour": None,
+        "size": None,
+        "in_stock_only": False,
+    }
+    assert trace["tool_calls"][0]["result"]["success"] is True
+
+
+def test_each_chat_turn_starts_a_new_responses_chain() -> None:
+    model_client = ScriptedResponsesClient([direct_response(1), direct_response(2)])
+    application = create_app(
+        Settings(enable_eval_traces=True), responses_client=model_client
+    )
+
+    with TestClient(application) as test_client:
+        first = test_client.post(
+            "/api/v1/chat",
+            json={"session_id": "same-session", "message": "First"},
+        )
+        second = test_client.post(
+            "/api/v1/chat",
+            json={"session_id": "same-session", "message": "Second"},
+        )
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert [request.previous_response_id for request in model_client.requests] == [
+        None,
+        None,
+    ]
+    assert [request.input for request in model_client.requests] == ["First", "Second"]
+
+
+def test_terminal_agent_failure_returns_only_generic_http_500() -> None:
+    model_client = ScriptedResponsesClient(
+        [ResponsesClientError("openai_invalid_request")]
+    )
+    application = create_app(
+        Settings(enable_eval_traces=True), responses_client=model_client
+    )
+
+    with TestClient(application) as test_client:
+        response = test_client.post(
+            "/api/v1/chat", json={"message": "Trigger invalid request"}
+        )
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Sales Agent is temporarily unavailable."}
+    assert "openai_invalid_request" not in response.text
+
+
+def test_missing_api_key_is_controlled_at_chat_not_import_or_health() -> None:
+    application = create_app(Settings(openai_api_key=None))
+
+    with TestClient(application) as test_client:
+        health_response = test_client.get("/health")
+        chat_response = test_client.post("/api/v1/chat", json={"message": "Hello"})
+
+    assert health_response.status_code == 200
+    assert chat_response.status_code == 500
+    assert chat_response.json() == {"detail": "Sales Agent is temporarily unavailable."}

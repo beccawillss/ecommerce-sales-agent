@@ -266,7 +266,7 @@ Do not record raw provider request/response objects, API keys, headers, environm
 
 On terminal failure, `ChatService` completes and stores a safe failure trace where possible, then raises one application exception carrying an internal trace ID and stable error category but no provider message. The chat route maps that exception to the contract's existing HTTP 500 behavior with a generic detail such as `Sales Agent is temporarily unavailable.` It must not add a new success/error response variant or expose the internal trace ID, raw OpenAI exception, request ID, credential, or prompt. Service-level tests can use the exception's trace ID to retrieve and inspect the stored failure trace; shopper-facing API tests assert only the generic response.
 
-Classify failures into stable internal/trace codes such as `missing_openai_configuration`, `openai_authentication_failed`, `openai_rate_limited`, `openai_timeout`, `openai_unavailable`, `malformed_model_response`, and `orchestration_limit_reached`. Catch documented official SDK exceptions narrowly in the concrete adapter and translate them to application errors. Configure an intentional bounded SDK timeout and retry policy; do not add an unbounded application retry loop. A dispatcher business/error envelope remains part of the model loop and is not automatically an HTTP 500.
+Classify failures into stable internal/trace codes such as `missing_openai_configuration`, `openai_authentication_failed`, `openai_invalid_request`, `openai_rate_limited`, `openai_timeout`, `openai_unavailable`, `malformed_model_response`, and `orchestration_limit_reached`. Catch documented official SDK exceptions narrowly in the concrete adapter and translate them to application errors. Configure an intentional bounded SDK timeout and retry policy; do not add an unbounded application retry loop. A dispatcher business/error envelope remains part of the model loop and is not automatically an HTTP 500.
 
 No `previous_response_id` is stored against `session_id`. Each call to `ChatService.chat` starts with the current request message and a null previous response ID. Phase 6 will introduce cross-turn state deliberately.
 
@@ -515,14 +515,41 @@ The smoke command must never be run automatically and must not be considered a C
 - [x] 2026-08-24: Inspected the Phase 1 commerce, Phase 2 API/trace, Phase 3 tool layers, tests, contract, environment, and project instructions.
 - [x] 2026-08-24: Checked current official Responses function-calling, continuation/instruction, usage, and model guidance.
 - [x] 2026-08-24: Authored this implementation-ready Phase 4 ExecPlan without changing application behavior or dependencies.
-- [ ] Milestone 1 — OpenAI configuration and client boundary.
-- [ ] Milestone 2 — Versioned developer instructions.
-- [ ] Milestone 3 — Single-response model execution.
-- [ ] Milestone 4 — Function-call orchestration loop.
-- [ ] Milestone 5 — Tool trajectory trace integration.
-- [ ] Milestone 6 — Error and orchestration-limit handling.
-- [ ] Milestone 7 — Chat endpoint integration.
-- [ ] Milestone 8 — Offline integration tests and optional live smoke verification.
+- [x] 2026-08-24: Milestone 1 — Added and locked OpenAI Python 3.3.1,
+  centrally validated OpenAI settings, an application-owned response boundary,
+  lazy SDK construction, adapter mapping tests, and offline-safe import behavior.
+- [x] 2026-08-24: Milestone 2 — Added one lean, fixture-independent
+  `phase4-v1` developer instruction covering consultative behavior, tool routing,
+  authoritative evidence, read-only permissions, direct output, and stop rules.
+- [x] 2026-08-24: Milestone 3 — Added the stateless orchestrator boundary,
+  direct final-text validation, safe failed/incomplete/missing-metadata handling,
+  configured request construction, and usage propagation under scripted tests.
+- [x] 2026-08-24: Milestone 4 — Added exact-ID function output correlation,
+  immediately preceding response continuation, ordered sequential/batched
+  dispatcher execution, deterministic envelope serialization, recoverable
+  malformed arguments, negative commerce evidence, and final-text completion.
+- [x] 2026-08-24: Milestone 5 — Added dispatch-time tool/error evidence,
+  contiguous trace mapping, field-wise usage aggregation, complete-turn latency,
+  safe success/failure trace persistence, and Phase 4 response construction.
+- [x] 2026-08-24: Milestone 6 — Enforced six-response, eight-call, and
+  two-identical-signature bounds; terminal missing/duplicate call IDs; recoverable
+  malformed/schema/unknown-tool outputs; stable SDK error translation; and safe
+  failure traces plus generic HTTP error mapping under offline tests.
+- [x] 2026-08-24: Milestone 7 — Assembled repositories, commerce, dispatcher,
+  lazy/injectable Responses client, orchestrator, chat service, and routes;
+  replaced stub HTTP behavior with offline-tested model text/tool loops while
+  preserving sessions, trace gating, generic 500s, and empty Phase 4 structures.
+- [x] 2026-08-24: Milestone 8 — Consolidated the scripted application-boundary
+  fake, documented Phase 4 configuration/behavior/retention, added an explicit
+  safe live smoke script, and completed offline integration and repository checks.
+- [x] 2026-08-25: Improved the developer-only live smoke diagnostic to report
+  the existing `ChatServiceError.code` category without changing the generic
+  shopper HTTP 500, and added offline success, classified-failure, and
+  unclassified-error redaction tests.
+- [x] 2026-08-28: Replaced the OpenAI-facing `maximum_price` Decimal union with
+  an explicit nullable decimal-string schema, retained Pydantic/Decimal runtime
+  validation, and classified provider HTTP 400 failures as
+  `openai_invalid_request` without changing the public HTTP 500.
 
 ## Discoveries
 
@@ -533,6 +560,28 @@ The smoke command must never be run automatically and must not be considered a C
 - `ChatService` owns both trace assembly and session turn indices today. Keeping it as the HTTP application-service boundary avoids moving session concerns into the stateless orchestrator.
 - Official Responses behavior requires re-sending `instructions` when continuing with `previous_response_id`; the loop must make this explicit rather than relying on prompt state.
 - The repository has no current production error mapper. Phase 4 needs one narrow application exception/HTTP 500 mapping rather than a new public error schema.
+- The Phase 3 `get_product` description contained an accidental trailing comma,
+  making it a one-element tuple. The existing baseline test caught this and the
+  installed SDK requires a string description, so implementation removed only
+  that comma without changing the description text or registry structure.
+- `uv add` resolved the current official SDK to `openai==3.3.1`. Its synchronous
+  client accepts bounded `timeout` and `max_retries` configuration, and its
+  Responses create method supports every approved Phase 4 parameter directly.
+- The former `salesagent.services` package initializer eagerly imported both
+  chat and commerce. Once chat depended on orchestration and orchestration on the
+  commerce dispatcher, those convenience re-exports created a circular import.
+  Removing unused eager re-exports restored the intended concrete-module
+  dependency direction without changing a public application API.
+- Live per-tool Responses validation isolated `search_products.maximum_price`
+  as the only rejected strict tool field. Pydantic's validation schema for the
+  nullable `Decimal` emitted a number/string/null `anyOf` with a Decimal regex;
+  the Responses API accepted the other three tools but rejected that schema.
+  The OpenAI-facing field now uses the supported nullable string type while the
+  dispatcher still validates it through `SearchProductsArguments` into Decimal.
+- The SDK's `BadRequestError` is an `APIStatusError`, so the former broad status
+  catch incorrectly classified rejected HTTP 400 requests as provider
+  unavailability. A preceding narrow catch now maps them to the safe
+  `openai_invalid_request` category without retaining provider error text.
 
 ## Decision log
 
@@ -545,10 +594,35 @@ The smoke command must never be run automatically and must not be considered a C
 - **Decision:** Limit a turn to 6 Responses calls, 8 custom calls, and 2 identical call signatures. **Reason:** This covers expected consultative trajectories plus one recovery while bounding latency and spend. **Consequence:** Exhaustion is a safe 500 infrastructure failure and trace error, never an infinite loop.
 - **Decision:** Request `parallel_tool_calls=False` and still process any returned batch sequentially in output order. **Reason:** Read-only sequential execution is simple and trace-deterministic. **Consequence:** No async dispatcher or parallel trace reconciliation is introduced.
 - **Decision:** Start with configurable `gpt-5.6-terra`, low reasoning effort, 2000 maximum output tokens, and a bounded timeout. **Reason:** Current official guidance positions Terra as a capability/cost balance, while low reasoning and a short answer ceiling suit a retail conversation baseline. **Consequence:** Evaluation may justify changing defaults through configuration without code changes.
+- **Decision:** Bound configured output tokens to 16,000 and timeout to 120 seconds,
+  with defaults of 2,000 and 30 seconds, and retain two SDK retries. **Reason:**
+  These application limits permit operational tuning while keeping each provider
+  attempt and the SDK retry behavior finite. **Consequence:** Invalid environment
+  values fail during settings construction; the adapter performs no extra retry loop.
 - **Decision:** Return the complete JSON-safe dispatcher envelope as function output, with Decimal-derived values preserved as strings. **Reason:** The envelope carries authoritative data and explicit negative/error semantics without a second result format. **Consequence:** The model sees stable structured evidence and no binary-float commerce values.
+- **Decision:** Override only the OpenAI-facing
+  `search_products.maximum_price` property with a nullable decimal-string
+  schema. **Reason:** Strict Responses validation rejects Pydantic's Decimal
+  `anyOf`, but changing the domain type or global schema normalization would
+  weaken authoritative money handling or affect unrelated fields.
+  **Consequence:** The provider emits a string or null, and the unchanged
+  dispatcher/Pydantic boundary converts and validates it as `Decimal | None`.
 - **Decision:** Sum input, output, and total usage from every Responses call in a shopper turn. **Reason:** The trace describes the cost of the whole observed turn, not only its final request. **Consequence:** Multi-call usage tests assert field-wise totals.
 - **Decision:** Define top-level `latency_ms` as complete synchronous chat-turn orchestration latency, including provider calls and local tools. **Reason:** This matches shopper-observed service time; individual tool durations remain separately visible. **Consequence:** Tests assert containment/nonnegativity, not exact timing.
 - **Decision:** Persist a safe trace and return the existing generic HTTP 500 category for terminal agent failures. **Reason:** The contract has no success-response error union, and provider details are unsafe. **Consequence:** No public shape changes; service tests inspect failure traces through an internal exception trace ID.
+- **Decision:** Classify SDK `BadRequestError` separately as
+  `openai_invalid_request` before the generic `APIStatusError` catch.
+  **Reason:** A provider-rejected request is an integration/input failure, not
+  evidence that the provider is unavailable. **Consequence:** Internal traces
+  and the developer smoke diagnostic distinguish it safely, while shoppers
+  still receive the same generic HTTP 500 and no provider text.
+- **Decision:** Let the optional smoke script invoke the exact `ChatService`
+  assembled by `create_app` and report only `ChatServiceError.code` on terminal
+  failures. **Reason:** The public route deliberately discards the internal
+  trace ID and category, while duplicating provider exception mapping in the
+  script would create a second, potentially unsafe taxonomy. **Consequence:**
+  the app retains its assembled service and trace repository in process-local
+  FastAPI state for developer diagnostics; no endpoint or response shape changes.
 - **Decision:** Leave recommendations empty and promotion/pricing null. **Reason:** Phase 4 model prose is not an authoritative structured commerce boundary; Phase 5 will validate and hydrate nominated products. **Consequence:** API tests explicitly prevent premature model-authored cards or prices.
 
 ## Risks and follow-ups
@@ -570,6 +644,57 @@ The smoke command must never be run automatically and must not be considered a C
 
 ## Outcome
 
-Planning completed on 2026-08-24. This document specifies the Phase 4 architecture, trust boundaries, bounded continuation loop, trace/error mappings, milestones, and offline/live validation strategy. No Phase 4 implementation, dependency, source, test, contract, fixture, README, or environment change was made as part of planning.
+Phase 4 implementation completed on 2026-08-24. The application now uses the
+official OpenAI Python SDK and Responses API behind a lazy, injectable adapter.
+`AgentOrchestrator` owns a synchronous one-turn continuation loop, re-sends the
+same `phase4-v1` instructions and four authoritative tool definitions on every
+request, preserves exact response/call correlation, dispatches only through the
+Phase 3 boundary, and enforces the six-response, eight-attempt, and
+two-identical-signature limits. `ChatService` owns session turns, public response
+construction, usage/latency aggregation, and safe success/failure trace storage.
+Structured recommendations remain empty and promotion/pricing remain null.
 
-Implementation and validation results remain pending. As milestones complete, update `Progress`, record any SDK or repository discoveries, amend the decision log before diverging from this design, and replace this provisional outcome with the behavior and commands that actually shipped.
+OpenAI Python `3.3.1` is locked with a compatible `<4.0` range. Effective defaults
+are `gpt-5.6-terra`, low reasoning, 2,000 maximum output tokens, a 30-second SDK
+timeout per attempt, and two SDK retries. Settings permit bounded environment
+overrides. Missing credentials do not affect import, health, or offline tests;
+the first production chat fails through the safe generic HTTP 500 path.
+
+Final validation from the repository root passed:
+
+- `uv sync` resolved and checked the locked environment;
+- `uv run pytest` passed 138 offline tests with no external OpenAI request;
+- `uv run ruff check .` passed;
+- `uv run ruff format --check .` passed;
+- `uv run mypy src` passed in strict mode;
+- `uv run python -c "from salesagent.main import app; print(app.title)"` printed
+  `Sales Agent` without an API key;
+- the optional smoke script's missing-key guard exited safely with status 2.
+
+The paid live smoke check was deliberately not run. It remains an explicit
+developer action documented in the README. A subsequent developer run that
+failed through the generic HTTP 500 led to a narrow diagnostic improvement: the
+script now calls the same assembled `ChatService`, prints its existing safe
+failure category, and suppresses both classified exception causes and unexpected
+exception text. The shopper-facing route still returns only the existing generic
+500 detail. A later live per-tool investigation found that the Responses API
+rejected only Pydantic's generated Decimal union for
+`search_products.maximum_price`. The OpenAI-facing property is now explicitly a
+nullable decimal string; the unchanged `SearchProductsArguments` boundary still
+converts valid strings to Decimal and rejects malformed or negative values. The
+same investigation established that SDK `BadRequestError` was falling through to
+the generic `APIStatusError` mapping. HTTP 400 now becomes the safe internal
+`openai_invalid_request` category while the public 500 remains generic.
+
+The implementation follows the approved design. Narrow deviations were limited
+to correcting the pre-existing
+tuple-valued `get_product` description, removing unused eager service re-exports
+that caused a circular import, and performing production dependency assembly
+during trace integration so `ChatService` remained testable before final HTTP
+tests. No API contract, commerce behavior, fixture, Phase 5 recommendation work,
+or Phase 6 conversation memory was added.
+
+Remaining risks are the already documented provider-side stored-Response
+retention review, unvalidated model prose outside structured recommendations,
+model-alias behavior drift, and failure trace discoverability under the unchanged
+public 500 contract. These are follow-ups, not incomplete Phase 4 behavior.

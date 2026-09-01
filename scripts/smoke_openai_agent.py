@@ -1,4 +1,4 @@
-"""Explicit, optional live smoke check for the Phase 4 chat path."""
+"""Explicit, optional live smoke check for the Phase 5 recommendation path."""
 
 from typing import cast
 
@@ -9,7 +9,7 @@ from salesagent.main import create_app
 from salesagent.repositories.traces import InMemoryTraceRepository
 from salesagent.services.chat import ChatService, ChatServiceError
 
-SMOKE_MESSAGE = "Briefly introduce the outdoor shopping help you offer."
+SMOKE_MESSAGE = "Recommend one waterproof hiking jacket under £160."
 
 
 def run_live_smoke(
@@ -43,9 +43,19 @@ def run_live_smoke(
         print("Live chat succeeded, but its safe trace could not be retrieved.")
         return 1
 
-    print(f"message: {response.message}")
+    recommendation_ids = [item.product_id for item in response.recommendations]
+    if (
+        not trace.tool_calls
+        or not recommendation_ids
+        or recommendation_ids != trace.recommended_product_ids
+    ):
+        print("Live smoke completed without required recommendation evidence.")
+        return 1
+
     print(f"model: {trace.model}")
     print(f"tool_calls: {len(trace.tool_calls)}")
+    print(f"recommendations: {len(recommendation_ids)}")
+    print(f"recommendation_ids: {','.join(recommendation_ids)}")
     print(f"total_tokens: {trace.token_usage.total_tokens}")
     print(f"latency_ms: {trace.latency_ms}")
     return 0

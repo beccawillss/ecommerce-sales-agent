@@ -7,6 +7,7 @@ import httpx2
 import openai
 import pytest
 
+from salesagent.agent.final_output import final_output_text_format
 from salesagent.agent.responses_client import (
     FunctionCallOutput,
     OpenAIResponsesClient,
@@ -38,6 +39,7 @@ def request(
         model="gpt-5.6-terra",
         instructions="developer instructions",
         tools=({"type": "function", "name": "search_products"},),
+        text_format=final_output_text_format(),
         reasoning_effort="low",
         max_output_tokens=2000,
     )
@@ -90,6 +92,7 @@ def test_adapter_maps_text_calls_order_usage_and_configuration() -> None:
             "previous_response_id": None,
             "instructions": "developer instructions",
             "tools": [{"type": "function", "name": "search_products"}],
+            "text": {"format": final_output_text_format()},
             "reasoning": {"effort": "low"},
             "max_output_tokens": 2000,
             "tool_choice": "auto",
@@ -131,6 +134,7 @@ def test_adapter_maps_correlated_function_outputs_for_continuation() -> None:
     ]
     assert resource.calls[0]["previous_response_id"] == "resp-1"
     assert resource.calls[0]["instructions"] == "developer instructions"
+    assert resource.calls[0]["text"] == {"format": final_output_text_format()}
 
 
 def test_adapter_preserves_incomplete_status_reason_and_missing_call_id() -> None:

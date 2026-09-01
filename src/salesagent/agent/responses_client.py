@@ -40,6 +40,7 @@ class ResponseRequest:
     model: str
     instructions: str
     tools: tuple[dict[str, object], ...]
+    text_format: dict[str, object]
     reasoning_effort: ReasoningEffort
     max_output_tokens: int
 
@@ -131,6 +132,7 @@ class OpenAIResponsesClient:
                 previous_response_id=request.previous_response_id,
                 instructions=request.instructions,
                 tools=cast(Any, list(request.tools)),
+                text={"format": cast(Any, request.text_format)},
                 reasoning={"effort": request.reasoning_effort},
                 max_output_tokens=request.max_output_tokens,
                 tool_choice="auto",

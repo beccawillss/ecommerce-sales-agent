@@ -5,6 +5,9 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Literal, NoReturn, cast
 
+from pydantic import ValidationError
+
+from salesagent.agent.final_output import AgentFinalOutput, final_output_text_format
 from salesagent.agent.instructions import DEVELOPER_INSTRUCTIONS, PROMPT_VERSION
 from salesagent.agent.responses_client import (
     FunctionCallOutput,
@@ -15,7 +18,14 @@ from salesagent.agent.responses_client import (
 )
 from salesagent.agent.tools.definitions import ToolName, tool_definitions
 from salesagent.agent.tools.dispatcher import ToolDispatcher
-from salesagent.agent.tools.models import ToolExecutionError, ToolExecutionResult
+from salesagent.agent.tools.models import (
+    DiscountData,
+    InventoryData,
+    ProductData,
+    SearchProductsData,
+    ToolExecutionError,
+    ToolExecutionResult,
+)
 from salesagent.config import ReasoningEffort
 
 OrchestrationErrorCode = Literal[
@@ -26,6 +36,7 @@ OrchestrationErrorCode = Literal[
     "openai_timeout",
     "openai_unavailable",
     "malformed_model_response",
+    "invalid_tool_evidence",
     "orchestration_limit_reached",
 ]
 
@@ -39,6 +50,8 @@ class OrchestrationResult:
     """Successful final text and model evidence for one shopper turn."""
 
     final_text: str
+    nominated_product_ids: tuple[str, ...]
+    grounded_product_ids: frozenset[str]
     model: str
     prompt_version: str
     usage: ResponseUsage
@@ -123,6 +136,7 @@ class AgentOrchestrator:
         total_function_calls = 0
         seen_call_ids: set[str] = set()
         signature_counts: Counter[tuple[str, str]] = Counter()
+        grounded_product_ids: dict[str, str] = {}
         tool_calls: list[ToolTraceEvidence] = []
         errors: list[TraceErrorEvidence] = []
 
@@ -146,6 +160,7 @@ class AgentOrchestrator:
                 model=self._model,
                 instructions=DEVELOPER_INSTRUCTIONS,
                 tools=tuple(tool_definitions()),
+                text_format=final_output_text_format(),
                 reasoning_effort=self._reasoning_effort,
                 max_output_tokens=self._max_output_tokens,
             )
@@ -169,11 +184,16 @@ class AgentOrchestrator:
 
             calls = response.function_calls
             if not calls:
-                final_text = response.output_text.strip()
-                if not final_text:
+                try:
+                    final_output = AgentFinalOutput.model_validate_json(
+                        response.output_text
+                    )
+                except (ValidationError, ValueError):
                     fail("malformed_model_response")
                 return OrchestrationResult(
-                    final_text=final_text,
+                    final_text=final_output.message,
+                    nominated_product_ids=final_output.nominated_product_ids,
+                    grounded_product_ids=frozenset(grounded_product_ids.values()),
                     model=self._model,
                     prompt_version=PROMPT_VERSION,
                     usage=usage,
@@ -218,6 +238,15 @@ class AgentOrchestrator:
                     dict[str, object], result.model_dump(mode="json")
                 )
                 if result.arguments is not None:
+                    if result.success:
+                        try:
+                            observed_ids = _grounded_ids_from_result(call.name, result)
+                        except (ValidationError, ValueError):
+                            fail("invalid_tool_evidence", tool_call_id=call_id)
+                        for product_id in observed_ids:
+                            grounded_product_ids.setdefault(
+                                product_id.casefold(), product_id
+                            )
                     tool_calls.append(
                         ToolTraceEvidence(
                             call_id=call_id,
@@ -291,6 +320,47 @@ def _invalid_arguments(tool_name: str) -> ToolExecutionResult:
         ),
         duration_ms=0,
     )
+
+
+def _grounded_ids_from_result(
+    tool_name: str, result: ToolExecutionResult
+) -> tuple[str, ...]:
+    """Validate successful tool data and return authoritative product IDs."""
+    if (
+        result.tool_name != tool_name
+        or result.arguments is None
+        or result.data is None
+        or result.error is not None
+    ):
+        raise ValueError("successful tool result envelope is inconsistent")
+
+    if tool_name == "search_products":
+        search_data = SearchProductsData.model_validate(result.data)
+        if search_data.count != len(search_data.products):
+            raise ValueError("search result count is inconsistent")
+        return tuple(
+            _validated_product_id(product.product_id)
+            for product in search_data.products
+        )
+    if tool_name == "get_product":
+        product_data = ProductData.model_validate(result.data)
+        return (_validated_product_id(product_data.product_id),)
+    if tool_name == "check_inventory":
+        inventory_data = InventoryData.model_validate(result.data)
+        if inventory_data.status == "product_not_found":
+            return ()
+        return (_validated_product_id(inventory_data.product_id),)
+    if tool_name == "validate_discount":
+        DiscountData.model_validate(result.data)
+        return ()
+    raise ValueError("successful tool name is not allowlisted")
+
+
+def _validated_product_id(product_id: str) -> str:
+    canonical_id = product_id.strip()
+    if not canonical_id:
+        raise ValueError("tool result product ID is blank")
+    return canonical_id
 
 
 def _add_usage(left: ResponseUsage, right: ResponseUsage) -> ResponseUsage:

@@ -447,14 +447,16 @@ The command must not be invoked by pytest or CI. It passes only when the exact P
 - [x] 2026-08-29: Planning sources, Phase 1-4 implementation, all existing tests, installed OpenAI SDK boundary, and current official Structured Outputs guidance inspected.
 - [x] 2026-08-29: Initial Phase 5 design and implementation milestones documented; no runtime implementation performed.
 - [x] 2026-08-31: Approved pre-implementation amendments added for conditional live Structured Outputs acceptance, distinct invalid tool-evidence classification, and bounded rejected-ID trace display; no runtime implementation performed.
-- [ ] Milestone 1 — Strict internal final-output contract implemented and tested.
-- [ ] Milestone 2 — Structured Responses loop, prompt version, and grounding evidence implemented and tested.
-- [ ] Milestone 3 — Deterministic recommendation validation/hydration implemented and tested.
-- [ ] Milestone 4 — Chat response and trace integration implemented and tested.
-- [ ] Milestone 5 — Documentation, contract comparison, and full regression completed.
+- [x] 2026-08-31: Milestone 1 — Strict internal final-output contract implemented and tested (8 focused tests passed).
+- [x] 2026-08-31: Milestone 2 — Structured Responses loop, `phase5-v1` prompt, typed current-turn grounding evidence, and safe `invalid_tool_evidence` handling implemented (41 focused adapter/orchestrator/instruction tests passed).
+- [x] 2026-08-31: Milestone 3 — Deterministic recommendation validation/hydration, bounded rejected-ID display, Decimal preservation, re-fetching, and availability aggregation implemented (9 focused tests passed).
+- [x] 2026-08-31: Milestone 4 — Authoritative chat cards, accepted-ID trace linkage, recommendation validation evidence, null promotion/pricing, and safe failure traces integrated (24 focused service/API tests passed).
+- [x] 2026-08-31: Milestone 5 — README and guarded live-smoke behavior updated, generated OpenAPI recommendation/trace schemas compared with the unchanged YAML contract, and the complete 165-test offline quality gate passed. The conditional live provider smoke was not run because `OPENAI_API_KEY` was unavailable.
 
 ## Discoveries
 
+- Generated FastAPI OpenAPI retains `ChatResponse.recommendations.maxItems=3`, the existing `ProductRecommendation` required fields and availability enum, numeric money, the four required recommendation-validation booleans, and ordered string `recommended_product_ids`. This matters because Phase 5 required implementation population only; no public contract edit was necessary.
+- The implementation checkout still has OpenAI Python 3.3.1, whose `responses.create` signature accepts `text: ResponseTextConfigParam`; current official OpenAI documentation also confirms that `text` can carry structured JSON and that instructions are not inherited with `previous_response_id`. This validates reapplying both the strict format and developer instructions on every continuation without changing the Phase 4 adapter boundary.
 - `docs/product-spec.md` is named as authoritative by `AGENTS.md` but is absent from the inspected checkout. This matters because no unavailable product-spec semantics can be assumed for availability or matched variants; the plan uses the existing contract and records explicit decisions instead.
 - The public API and trace models already contain all Phase 5 output fields. This matters because implementation should populate existing fields rather than alter the contract.
 - Phase 4's adapter snapshots raw `output_text` and deliberately isolates SDK objects. OpenAI Python 3.3.1 and current official docs support strict Responses `text.format`, so Phase 5 can preserve that boundary and validate JSON with application-owned Pydantic models.
@@ -465,6 +467,8 @@ The command must not be invoked by pytest or CI. It passes only when the exact P
 
 ## Decision log
 
+- **Decision:** Reject a direct hydrator call containing more than three nominations with `ValueError`. **Reason:** Valid model output is already capped at three, while the application service should fail explicitly rather than silently discard internal caller data if that upstream invariant is bypassed. **Consequence:** No successful hydration result can contain more than three cards, and focused tests cover the defensive boundary.
+- **Decision:** Represent a recommendation re-fetch exception as `product_lookup_failed:<safe-id>` with `all_products_exist=False`. **Reason:** The application could not verify existence and must omit the card without leaking repository details. **Consequence:** A schema-valid turn can retain safe recommendation evidence rather than accepting stale data or exposing an exception.
 - **Decision:** Use a strict final Responses `text.format` with `message` and `nominated_product_ids`, not a fifth function tool. **Reason:** Function calls remain the bridge to application data, while Structured Outputs are the documented mechanism for shaping the model's final user response; a fifth tool would also conflict with the current four-tool registry and trace enum. **Consequence:** The existing loop remains intact and the final output gains one explicit schema-validation boundary.
 - **Decision:** Keep using `responses.create` plus application-owned Pydantic parsing rather than switching the adapter to SDK `responses.parse`. **Reason:** The current architecture snapshots SDK results immediately and uses provider-independent fakes. **Consequence:** The adapter sends the strict schema, while the orchestrator owns final semantic validation and safe error mapping.
 - **Decision:** Require one manual live Phase 5 smoke before merge when developer credentials are available, while keeping all automated tests offline. **Reason:** Phase 4 encountered a provider-side schema compatibility defect that SDK-shaped offline tests did not reveal, and Phase 5 introduces a new strict `text.format`. **Consequence:** Provider/schema compatibility receives explicit live acceptance evidence without adding paid, credential-dependent, or nondeterministic calls to pytest or CI.
@@ -496,6 +500,22 @@ The command must not be invoked by pytest or CI. It passes only when the exact P
 
 ## Outcome
 
-Planning completed on 2026-08-29. No Phase 5 source, test, dependency, contract, fixture, configuration, or runtime behavior change has been implemented yet.
+Completed on 2026-08-31. Phase 5 now requests one strict internal final object on every Responses call, parses shopper prose separately from up to three model-nominated IDs, and derives a current-turn grounding set only from typed successful commerce-tool results. Inconsistent successful tool evidence fails closed as `invalid_tool_evidence`; malformed final model output remains `malformed_model_response`.
 
-When implementation is complete, replace this paragraph with the shipped behavior, milestone results, exact validation commands and outcomes, deviations from the original design with reasons, and remaining limitations.
+`RecommendationHydrator` treats nominations as untrusted, de-duplicates case-insensitively, re-fetches every first-seen ID through the shared `CommerceService`, rejects unknown and current-turn-ungrounded products, preserves accepted nomination order and canonical IDs, and assembles card facts only from current immutable products. Availability is deterministic across all variants (`in_stock`, `out_of_stock`, or `partial` for valid current catalogue data), Decimal prices remain intact until existing API serialization, and `matched_variant`, `promotion`, and `pricing` remain null. Rejected-ID trace displays are single-line, control-safe, and capped at 64 Unicode code points.
+
+`ChatService` now returns the accepted authoritative cards and records exactly those canonical IDs in trace order. Recommendation filtering stays in `recommendation_validation.validation_errors`; top-level trace errors remain reserved for orchestration/tool-processing failures. Failure traces retain vacuously true empty recommendation validation, and the public HTTP 500 remains generic. No Phase 6 state, cross-turn grounding, deterministic reranking, price calculation, contract change, fixture change, dependency, lockfile change, or new configuration was introduced.
+
+Validation completed successfully from the repository root:
+
+- `uv sync` — resolved 35 packages and checked 33; no dependency or lockfile change.
+- `uv run pytest` — 165 tests passed; all automated coverage remained offline.
+- `uv run ruff check .` — passed.
+- `uv run ruff format --check .` — 51 files already formatted.
+- `uv run mypy src` — no issues in 28 source files.
+- `uv run python -c "from salesagent.main import app; print(app.title)"` — printed `Sales Agent`.
+- `git diff --check` — passed with no output.
+
+The generated FastAPI recommendation and trace schemas were compared with `contracts/salesagent_api_contract.yaml`; the existing public contract remains compatible and unchanged. There were no architectural deviations from the approved ExecPlan. Two previously open defensive details were made explicit in the Decision log: direct over-limit hydrator input raises `ValueError`, and an authoritative re-fetch exception becomes safe `product_lookup_failed` validation evidence with no card.
+
+The conditional manual Phase 5 live Structured Outputs smoke was not run because `OPENAI_API_KEY` was unavailable in this environment. Its script and offline tests now require at least one tool call, at least one authoritative recommendation, and exact response/trace accepted-ID equality while printing no shopper prompt or model prose. Remaining limitations are the plan's intentional Phase 5 boundaries: prose claims are not independently verified, exact variants remain null, and current-turn-only grounding requires a fresh commerce tool result on every turn until Phase 6 defines backend conversation state.

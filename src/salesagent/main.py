@@ -17,6 +17,7 @@ from salesagent.repositories.promotions import PromotionRepository
 from salesagent.repositories.traces import InMemoryTraceRepository
 from salesagent.services.chat import ChatService
 from salesagent.services.commerce import CommerceService
+from salesagent.services.recommendations import RecommendationHydrator
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 
@@ -61,7 +62,11 @@ def create_app(
         reasoning_effort=settings.openai_reasoning_effort,
         max_output_tokens=settings.openai_max_output_tokens,
     )
-    chat_service = ChatService(trace_repository, orchestrator)
+    chat_service = ChatService(
+        trace_repository,
+        orchestrator,
+        RecommendationHydrator(commerce_service),
+    )
 
     application = FastAPI(title="Sales Agent", version="1.0.0")
     # Developer-side diagnostics can exercise the exact assembled service without

@@ -19,7 +19,7 @@ from salesagent.agent.tools.models import ToolExecutionResult
 from salesagent.repositories.products import ProductRepository
 from salesagent.repositories.promotions import PromotionRepository
 from salesagent.services.commerce import CommerceService
-from tests.fakes import ScriptedResponsesClient
+from tests.fakes import ScriptedResponsesClient, final_output_json
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -37,6 +37,22 @@ class NoCallDispatcher(ToolDispatcher):
         copied = dict(arguments)
         self.calls.append((tool_name, copied))
         return super().dispatch(tool_name, copied)
+
+
+class InvalidEvidenceDispatcher(ToolDispatcher):
+    """Return a successful but structurally inconsistent tool envelope."""
+
+    def dispatch(
+        self, tool_name: str, arguments: Mapping[str, object]
+    ) -> ToolExecutionResult:
+        return ToolExecutionResult(
+            tool_name=tool_name,
+            success=True,
+            arguments=dict(arguments),
+            data={"unexpected": "provider-secret-must-not-be-traced"},
+            error=None,
+            duration_ms=0,
+        )
 
 
 @pytest.fixture
@@ -68,7 +84,9 @@ def test_direct_final_response_preserves_text_configuration_and_usage(
         [
             ModelResponse(
                 response_id="resp-direct",
-                output_text="  What activity are you shopping for?  ",
+                output_text=final_output_json(
+                    "  What activity are you shopping for?  "
+                ),
                 function_calls=(),
                 usage=usage,
                 status="completed",
@@ -79,6 +97,8 @@ def test_direct_final_response_preserves_text_configuration_and_usage(
     result = orchestrator(client, dispatcher).run("I need a jacket")
 
     assert result.final_text == "What activity are you shopping for?"
+    assert result.nominated_product_ids == ()
+    assert result.grounded_product_ids == frozenset()
     assert result.model == "gpt-5.6-terra"
     assert result.prompt_version == PROMPT_VERSION
     assert result.usage == usage
@@ -87,6 +107,7 @@ def test_direct_final_response_preserves_text_configuration_and_usage(
     assert request.input == "I need a jacket"
     assert request.previous_response_id is None
     assert request.instructions == DEVELOPER_INSTRUCTIONS
+    assert request.text_format["type"] == "json_schema"
     assert request.reasoning_effort == "low"
     assert request.max_output_tokens == 2000
     assert [tool["name"] for tool in request.tools] == [
@@ -157,7 +178,7 @@ def test_one_tool_call_round_trips_exact_id_and_continues_to_final_text(
             ),
             ModelResponse(
                 response_id="resp-final",
-                output_text="That promotion code is not recognized.",
+                output_text=final_output_json("That promotion code is not recognized."),
                 function_calls=(),
                 usage=ResponseUsage(input_tokens=7, output_tokens=4, total_tokens=11),
                 status="completed",
@@ -225,7 +246,9 @@ def test_sequential_responses_chain_to_immediately_preceding_id(
             ),
             ModelResponse(
                 response_id="resp-final",
-                output_text="The Ocean Blue size M is in stock.",
+                output_text=final_output_json(
+                    "The Ocean Blue size M is in stock.", ["JKT-001"]
+                ),
                 function_calls=(),
                 usage=ResponseUsage(total_tokens=3),
                 status="completed",
@@ -236,6 +259,8 @@ def test_sequential_responses_chain_to_immediately_preceding_id(
     result = orchestrator(client, dispatcher).run("Find cycling stock")
 
     assert result.usage.total_tokens == 6
+    assert result.nominated_product_ids == ("JKT-001",)
+    assert result.grounded_product_ids == frozenset({"JKT-001", "JKT-002", "JKT-005"})
     assert [call[0] for call in dispatcher.calls] == [
         "search_products",
         "check_inventory",
@@ -245,6 +270,127 @@ def test_sequential_responses_chain_to_immediately_preceding_id(
         "resp-search",
         "resp-stock",
     ]
+    assert all(
+        request.text_format == client.requests[0].text_format
+        for request in client.requests
+    )
+
+
+@pytest.mark.parametrize(
+    ("tool_name", "arguments_json", "expected_grounded"),
+    [
+        ("get_product", '{"product_id":"jkt-003"}', {"JKT-003"}),
+        (
+            "check_inventory",
+            '{"product_id":"JKT-003","colour":"Missing","size":"M"}',
+            {"JKT-003"},
+        ),
+        (
+            "check_inventory",
+            '{"product_id":"UNKNOWN","colour":"Blue","size":"M"}',
+            set(),
+        ),
+    ],
+)
+def test_successful_typed_tool_results_determine_grounding(
+    dispatcher: NoCallDispatcher,
+    tool_name: str,
+    arguments_json: str,
+    expected_grounded: set[str],
+) -> None:
+    client = ScriptedResponsesClient(
+        [
+            ModelResponse(
+                response_id="resp-tool",
+                output_text="",
+                function_calls=(
+                    FunctionCall(
+                        call_id="call-tool",
+                        name=tool_name,
+                        arguments_json=arguments_json,
+                    ),
+                ),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+            ModelResponse(
+                response_id="resp-final",
+                output_text=final_output_json("Done.", expected_grounded),
+                function_calls=(),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+        ]
+    )
+
+    result = orchestrator(client, dispatcher).run("Check it")
+
+    assert result.grounded_product_ids == frozenset(expected_grounded)
+
+
+def test_raw_tool_arguments_never_ground_a_product(
+    dispatcher: NoCallDispatcher,
+) -> None:
+    client = ScriptedResponsesClient(
+        [
+            ModelResponse(
+                response_id="resp-invalid-arguments",
+                output_text="",
+                function_calls=(
+                    FunctionCall(
+                        call_id="call-invalid-arguments",
+                        name="check_inventory",
+                        arguments_json='{"product_id":"JKT-001"}',
+                    ),
+                ),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+            ModelResponse(
+                response_id="resp-final",
+                output_text=final_output_json("Done.", ["JKT-001"]),
+                function_calls=(),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+        ]
+    )
+
+    result = orchestrator(client, dispatcher).run("Check it")
+
+    assert result.nominated_product_ids == ("JKT-001",)
+    assert result.grounded_product_ids == frozenset()
+
+
+def test_inconsistent_successful_tool_result_fails_as_invalid_evidence(
+    dispatcher: NoCallDispatcher,
+) -> None:
+    invalid_dispatcher = InvalidEvidenceDispatcher(dispatcher._commerce)
+    client = ScriptedResponsesClient(
+        [
+            ModelResponse(
+                response_id="resp-invalid-evidence",
+                output_text="",
+                function_calls=(
+                    FunctionCall(
+                        call_id="call-invalid-evidence",
+                        name="get_product",
+                        arguments_json='{"product_id":"JKT-001"}',
+                    ),
+                ),
+                usage=ResponseUsage(total_tokens=3),
+                status="completed",
+            )
+        ]
+    )
+
+    with pytest.raises(AgentOrchestrationError) as captured:
+        orchestrator(client, invalid_dispatcher).run("Check it")
+
+    assert captured.value.code == "invalid_tool_evidence"
+    assert captured.value.tool_call_id == "call-invalid-evidence"
+    assert captured.value.tool_calls == ()
+    assert "provider-secret" not in str(captured.value)
 
 
 def test_multiple_calls_in_one_response_dispatch_and_return_in_order(
@@ -272,7 +418,7 @@ def test_multiple_calls_in_one_response_dispatch_and_return_in_order(
             ),
             ModelResponse(
                 response_id="resp-final",
-                output_text="Here are the verified details.",
+                output_text=final_output_json("Here are the verified details."),
                 function_calls=(),
                 usage=ResponseUsage(),
                 status="completed",
@@ -315,7 +461,7 @@ def test_malformed_or_non_object_arguments_are_recoverable(
             ),
             ModelResponse(
                 response_id="resp-recovered",
-                output_text="Which product did you mean?",
+                output_text=final_output_json("Which product did you mean?"),
                 function_calls=(),
                 usage=ResponseUsage(),
                 status="completed",
@@ -472,7 +618,7 @@ def test_dispatcher_rejections_return_safe_output_and_allow_recovery(
             ),
             ModelResponse(
                 response_id="resp-final",
-                output_text="I could not verify that request.",
+                output_text=final_output_json("I could not verify that request."),
                 function_calls=(),
                 usage=ResponseUsage(),
                 status="completed",
@@ -512,7 +658,7 @@ def test_product_not_found_is_traced_tool_error_and_can_recover(
             ),
             ModelResponse(
                 response_id="resp-final",
-                output_text="I could not find that product.",
+                output_text=final_output_json("I could not find that product."),
                 function_calls=(),
                 usage=ResponseUsage(),
                 status="completed",

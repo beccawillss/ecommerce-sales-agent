@@ -16,6 +16,7 @@ from salesagent.agent.responses_client import ResponseUsage
 from salesagent.api.models import (
     ChatRequest,
     ChatResponse,
+    ProductRecommendation,
     RecommendationValidation,
     ResolvedConstraints,
     TokenUsage,
@@ -24,6 +25,11 @@ from salesagent.api.models import (
     TraceResponse,
 )
 from salesagent.repositories.traces import InMemoryTraceRepository
+from salesagent.services.recommendations import (
+    HydratedRecommendation,
+    RecommendationHydrationResult,
+    RecommendationHydrator,
+)
 
 GENERIC_FAILURE_DETAIL = "Sales Agent is temporarily unavailable."
 
@@ -35,6 +41,7 @@ _TERMINAL_ERROR_MESSAGES: dict[OrchestrationErrorCode, str] = {
     "openai_timeout": "Model service timed out.",
     "openai_unavailable": "Model service is unavailable.",
     "malformed_model_response": "Model response could not be processed.",
+    "invalid_tool_evidence": "Tool result evidence could not be processed.",
     "orchestration_limit_reached": "Agent orchestration limit reached.",
 }
 
@@ -60,9 +67,11 @@ class ChatService:
         self,
         trace_repository: InMemoryTraceRepository,
         orchestrator: AgentOrchestrator,
+        recommendation_hydrator: RecommendationHydrator,
     ) -> None:
         self._trace_repository = trace_repository
         self._orchestrator = orchestrator
+        self._recommendation_hydrator = recommendation_hydrator
         self._turn_indices: dict[str, int] = {}
         self._turn_lock = Lock()
 
@@ -96,11 +105,18 @@ class ChatService:
             self._trace_repository.store(trace)
             raise ChatServiceError(trace_id=trace_id, code=error.code) from error
 
+        hydration = self._recommendation_hydrator.hydrate(
+            result.nominated_product_ids,
+            result.grounded_product_ids,
+        )
+        recommendations = [
+            self._map_recommendation(item) for item in hydration.recommendations
+        ]
         response = ChatResponse(
             session_id=session_id,
             trace_id=trace_id,
             message=result.final_text,
-            recommendations=[],
+            recommendations=recommendations,
             promotion=None,
             pricing=None,
         )
@@ -115,6 +131,7 @@ class ChatService:
             tool_evidence=result.tool_calls,
             errors=result.errors,
             started_at=started_at,
+            hydration=hydration,
         )
         self._trace_repository.store(trace)
         return response
@@ -132,7 +149,24 @@ class ChatService:
         tool_evidence: tuple[ToolTraceEvidence, ...],
         errors: tuple[TraceErrorEvidence, ...],
         started_at: int,
+        hydration: RecommendationHydrationResult | None = None,
     ) -> TraceResponse:
+        recommendation_validation = (
+            RecommendationValidation(
+                all_products_exist=hydration.all_products_exist,
+                prices_match_catalogue=hydration.prices_match_catalogue,
+                urls_match_catalogue=hydration.urls_match_catalogue,
+                stock_claims_validated=hydration.stock_claims_validated,
+                validation_errors=list(hydration.validation_errors),
+            )
+            if hydration is not None
+            else RecommendationValidation(
+                all_products_exist=True,
+                prices_match_catalogue=True,
+                urls_match_catalogue=True,
+                stock_claims_validated=True,
+            )
+        )
         trace = TraceResponse(
             trace_id=trace_id,
             session_id=session_id,
@@ -155,13 +189,10 @@ class ChatService:
                 )
                 for sequence, item in enumerate(tool_evidence, start=1)
             ],
-            recommendation_validation=RecommendationValidation(
-                all_products_exist=True,
-                prices_match_catalogue=True,
-                urls_match_catalogue=True,
-                stock_claims_validated=True,
+            recommendation_validation=recommendation_validation,
+            recommended_product_ids=(
+                list(hydration.accepted_product_ids) if hydration is not None else []
             ),
-            recommended_product_ids=[],
             promotion=None,
             pricing=None,
             latency_ms=0,
@@ -181,6 +212,20 @@ class ChatService:
         )
         latency_ms = (perf_counter_ns() - started_at) // 1_000_000
         return trace.model_copy(update={"latency_ms": latency_ms})
+
+    @staticmethod
+    def _map_recommendation(
+        recommendation: HydratedRecommendation,
+    ) -> ProductRecommendation:
+        return ProductRecommendation(
+            product_id=recommendation.product_id,
+            name=recommendation.name,
+            price=recommendation.price,
+            currency=recommendation.currency,
+            product_url=recommendation.product_url,
+            availability=recommendation.availability,
+            matched_variant=None,
+        )
 
     def _next_turn_index(self, session_id: str) -> int:
         with self._turn_lock:

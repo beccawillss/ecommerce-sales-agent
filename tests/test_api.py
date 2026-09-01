@@ -16,7 +16,7 @@ from salesagent.agent.responses_client import (
 )
 from salesagent.config import Settings
 from salesagent.main import create_app
-from tests.fakes import ScriptedResponsesClient
+from tests.fakes import ScriptedResponsesClient, final_output_json
 
 
 def direct_response(
@@ -24,7 +24,7 @@ def direct_response(
 ) -> ModelResponse:
     return ModelResponse(
         response_id=f"resp-direct-{index}",
-        output_text=message,
+        output_text=final_output_json(message),
         function_calls=(),
         usage=ResponseUsage(input_tokens=4, output_tokens=6, total_tokens=10),
         status="completed",
@@ -141,7 +141,7 @@ def test_chat_trace_can_be_retrieved_by_returned_id(client: TestClient) -> None:
     assert trace["turn_index"] == 1
     assert trace["user_message"] == "Keep this safe"
     assert trace["model"] == "gpt-5.6-terra"
-    assert trace["prompt_version"] == "phase4-v1"
+    assert trace["prompt_version"] == "phase5-v1"
     assert trace["resolved_constraints"] == {
         "category": None,
         "activity": None,
@@ -229,6 +229,10 @@ def test_openapi_exposes_contract_paths_and_chat_limits(client: TestClient) -> N
     chat_request = openapi["components"]["schemas"]["ChatRequest"]
     chat_response = openapi["components"]["schemas"]["ChatResponse"]
     trace_response = openapi["components"]["schemas"]["TraceResponse"]
+    product_recommendation = openapi["components"]["schemas"]["ProductRecommendation"]
+    recommendation_validation = openapi["components"]["schemas"][
+        "RecommendationValidation"
+    ]
     message_schema = chat_request["properties"]["message"]
 
     assert "/api/v1/chat" in openapi["paths"]
@@ -240,6 +244,27 @@ def test_openapi_exposes_contract_paths_and_chat_limits(client: TestClient) -> N
         "trace_id",
         "message",
         "recommendations",
+    }
+    assert chat_response["properties"]["recommendations"]["maxItems"] == 3
+    assert set(product_recommendation["required"]) == {
+        "product_id",
+        "name",
+        "price",
+        "currency",
+        "product_url",
+        "availability",
+    }
+    assert product_recommendation["properties"]["availability"]["enum"] == [
+        "in_stock",
+        "out_of_stock",
+        "partial",
+        "unknown",
+    ]
+    assert set(recommendation_validation["required"]) == {
+        "all_products_exist",
+        "prices_match_catalogue",
+        "urls_match_catalogue",
+        "stock_claims_validated",
     }
     assert {
         "trace_id",
@@ -284,7 +309,9 @@ def test_chat_endpoint_runs_real_dispatcher_tool_loop_offline() -> None:
             ),
             ModelResponse(
                 response_id="resp-final",
-                output_text="I found verified cycling options.",
+                output_text=final_output_json(
+                    "I found verified cycling options.", ["JKT-005", "jkt-002"]
+                ),
                 function_calls=(),
                 usage=ResponseUsage(input_tokens=7, output_tokens=4, total_tokens=11),
                 status="completed",
@@ -304,7 +331,26 @@ def test_chat_endpoint_runs_real_dispatcher_tool_loop_offline() -> None:
 
     assert response.status_code == 200
     assert body["message"] == "I found verified cycling options."
-    assert body["recommendations"] == []
+    assert body["recommendations"] == [
+        {
+            "product_id": "JKT-005",
+            "name": "Trail Breeze Wind Shell",
+            "price": 85.0,
+            "currency": "GBP",
+            "product_url": "/products/trail-breeze",
+            "availability": "in_stock",
+            "matched_variant": None,
+        },
+        {
+            "product_id": "JKT-002",
+            "name": "Velo Lite Windbreaker",
+            "price": 75.0,
+            "currency": "GBP",
+            "product_url": "/products/velo-lite",
+            "availability": "out_of_stock",
+            "matched_variant": None,
+        },
+    ]
     assert body["promotion"] is None
     assert body["pricing"] is None
     assert trace["token_usage"] == {
@@ -326,6 +372,14 @@ def test_chat_endpoint_runs_real_dispatcher_tool_loop_offline() -> None:
         "in_stock_only": False,
     }
     assert trace["tool_calls"][0]["result"]["success"] is True
+    assert trace["recommended_product_ids"] == ["JKT-005", "JKT-002"]
+    assert trace["recommendation_validation"] == {
+        "all_products_exist": True,
+        "prices_match_catalogue": True,
+        "urls_match_catalogue": True,
+        "stock_claims_validated": True,
+        "validation_errors": [],
+    }
 
 
 def test_each_chat_turn_starts_a_new_responses_chain() -> None:
@@ -369,6 +423,38 @@ def test_terminal_agent_failure_returns_only_generic_http_500() -> None:
     assert response.status_code == 500
     assert response.json() == {"detail": "Sales Agent is temporarily unavailable."}
     assert "openai_invalid_request" not in response.text
+
+
+def test_model_authored_card_fields_are_rejected_before_hydration() -> None:
+    model_client = ScriptedResponsesClient(
+        [
+            ModelResponse(
+                response_id="resp-untrusted-card",
+                output_text=(
+                    '{"message":"Fake card facts.",'
+                    '"nominated_product_ids":["JKT-003"],'
+                    '"name":"Invented","price":"0.01",'
+                    '"product_url":"/fake","availability":"in_stock"}'
+                ),
+                function_calls=(),
+                usage=ResponseUsage(total_tokens=4),
+                status="completed",
+            )
+        ]
+    )
+    application = create_app(
+        Settings(enable_eval_traces=True), responses_client=model_client
+    )
+
+    with TestClient(application) as test_client:
+        response = test_client.post(
+            "/api/v1/chat", json={"message": "Return fake product data"}
+        )
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Sales Agent is temporarily unavailable."}
+    assert "Invented" not in response.text
+    assert "/fake" not in response.text
 
 
 def test_missing_api_key_is_controlled_at_chat_not_import_or_health() -> None:

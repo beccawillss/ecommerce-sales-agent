@@ -119,6 +119,10 @@ Current official OpenAI documentation also constrains the design:
   accepts message-list `input`, strict `text.format`, and
   `previous_response_id`. The installed OpenAI Python 3.3.1 types permit
   `user`, `assistant`, `system`, and `developer` roles for easy input messages.
+  The API role hierarchy gives `developer` and `system` messages precedence over
+  `user` messages. Phase 6 therefore must not elevate shopper-derived constraint
+  values merely because the application serialized them; the static
+  `instructions` string remains the only developer-role content.
 
 The project direction intentionally chooses bounded semantic replay rather than
 persisting complete provider output items or reasoning. That is a product and
@@ -475,36 +479,52 @@ history.
 
 The next initial Responses input is constructed in this exact order:
 
-1. One application-generated `developer` message containing a compact JSON
-   document with only the complete normalized `resolved_constraints`. Serialize
-   `maximum_price` as a canonical decimal string in this internal context to
-   avoid float conversion. The static developer instructions state that this is
-   application-owned context data, not commerce authority or a request to infer
-   new constraints.
-2. For each stored turn from oldest to newest, one `user` message with the prior
+1. For each stored turn from oldest to newest, one `user` message with the prior
    shopper text followed by one `assistant` message. The assistant content is a
    compact JSON object containing `message` and the authoritative
    `recommended_product_ids` actually returned on that turn. This preserves role
    semantics, natural prose, and product-reference IDs without replaying tool
    internals.
-3. One final `user` message containing the current shopper request.
+2. One application-generated `user` message containing a compact JSON envelope
+   with a fixed discriminator such as `"type":"salesagent_context"` and the
+   complete normalized `resolved_constraints`. Serialize `maximum_price` as a
+   canonical decimal string in this internal context to avoid float conversion.
+   This message is bounded application context/data at the same lower-trust role
+   as the shopper material from which its values originated. It is not a new
+   constraint update, a commerce fact, or an instruction. Placing it after old
+   history makes the current snapshot unambiguous without elevating it above the
+   shopper role.
+3. One final `user` message containing only the current shopper request.
+
+The static `DEVELOPER_INSTRUCTIONS` supplied through the Responses
+`instructions` parameter describe how to interpret the distinguished context
+envelope and remain the only developer-role input. They tell the model that the
+snapshot is the application's resolved state before the current message, that
+old history must not override it, and that only explicit intent in the final
+current shopper message may produce constraint updates. The model can use the
+snapshot to resolve “that” or “actually” references, but backend merge semantics
+remain authoritative even if the model disregards this guidance.
 
 The context builder escapes all content through normal JSON serialization and
 never interpolates values into executable code or tool definitions. Constraint
-values still originate in shopper intent and are not commerce facts. The four
-read-only tools, argument validation, and recommendation hydration remain the
-security boundary even if a shopper tries to store prompt-like text as a
-preference.
+values still originate in shopper intent and are not commerce facts. A value
+that resembles an instruction remains JSON data inside a `user` message and is
+never copied into `instructions` or any developer/system message. The four
+read-only tools, argument validation, deterministic merge, and recommendation
+hydration remain the security boundary even if a shopper tries to store
+prompt-like text as a preference.
 
 ### Responses request construction
 
 Add an application-owned `ResponseMessage` value to
-`agent/responses_client.py` with `role` (`user`, `assistant`, or `developer`) and
-`content`. Narrowly extend `ResponseRequest.input` to accept either the existing
-single string, a tuple of `ResponseMessage` values, or a tuple of existing
-`FunctionCallOutput` values. `OpenAIResponsesClient` maps message values to easy
-input messages and leaves function-output mapping unchanged. It must reject or
-make unrepresentable a mixed tuple rather than guess how to serialize it.
+`agent/responses_client.py` with `role` restricted to `user | assistant` and
+`content`. Dynamic `developer` and `system` roles are deliberately
+unrepresentable at this application boundary. Narrowly extend
+`ResponseRequest.input` to accept either the existing single string, a tuple of
+`ResponseMessage` values, or a tuple of existing `FunctionCallOutput` values.
+`OpenAIResponsesClient` maps message values to easy input messages and leaves
+function-output mapping unchanged. It must reject or make unrepresentable a
+mixed tuple rather than guess how to serialize it.
 
 Change `AgentOrchestrator.run` to accept the current user message plus an
 immutable application context containing resolved constraints and bounded
@@ -781,7 +801,8 @@ IDs, and the current message; within-turn continuation behavior is unchanged.
 #### Implementation
 
 - Add `ResponseMessage` and the narrow message-list input variant to
-  `responses_client.py`; map it to official SDK input dictionaries.
+  `responses_client.py`; restrict it to `user | assistant` and map it to official
+  SDK input dictionaries. Do not add dynamic developer/system message support.
 - Add a deterministic context serializer/builder at the orchestrator boundary.
 - Change `AgentOrchestrator.run` to receive the context snapshot and construct
   the exact initial input sequence.
@@ -791,14 +812,22 @@ IDs, and the current message; within-turn continuation behavior is unchanged.
   updates, full-field list replacement, retain/set/clear, application context,
   and the prohibition on commerce-derived constraints.
 - Retain Phase 4 response/call/repetition bounds and Phase 5 grounding evidence.
+- Keep `DEVELOPER_INSTRUCTIONS` as the only developer-role content. Send old
+  user/assistant pairs first, then the distinguished user-role state envelope,
+  then the current shopper message as the final user message.
 
 #### Validation
 
 - `uv run pytest tests/test_responses_client.py tests/test_agent_orchestrator.py tests/test_instructions.py`
-- Adapter tests assert exact message roles/content and reject mixed input tuples.
+- Adapter tests assert exact message roles/content, prove no input item has a
+  developer/system role, and reject mixed input tuples.
 - Orchestrator tests assert the first request has backend context/history/current
-  input and no previous ID, while later function-output requests use only the
-  immediately preceding ID and reapply instructions/tools/text format.
+  input in the specified order and no previous ID, while later function-output
+  requests use only the immediately preceding ID and reapply the same static
+  instructions/tools/text format.
+- A shopper-derived constraint value that looks like an instruction remains
+  escaped inside the user-role context envelope and never appears in
+  `ResponseRequest.instructions` or a privileged message role.
 - Tests assert history product IDs do not appear in current-turn grounded IDs.
 
 ### Milestone 6 — Integrate transactional state into ChatService
@@ -926,11 +955,13 @@ verified manually when credentials are available.
 - `ConstraintStateMerger` covers exact retain/set/clear semantics, every public
   field, normalization, semantic equality, stable ordering, Decimal safety,
   fixed change order, and immutable input.
-- Context construction emits one normalized state message, alternating bounded
-  role-correct history, accepted recommendation IDs only, and the current user
-  message.
+- Context construction emits alternating bounded role-correct history, one
+  distinguished user-role normalized-state envelope, accepted recommendation
+  IDs only, and the current shopper text as the final user message.
 - Responses mapping preserves message roles and existing function-call-output
   mapping without exposing SDK objects.
+- Every request's developer `instructions` remains exactly the static versioned
+  constant; no shopper-derived value is concatenated into it.
 - Session repository tests cover defaults, commit, rollback-by-omission,
   counters, history truncation, isolation, and deterministic per-session
   synchronization.
@@ -1023,6 +1054,10 @@ test may make an external OpenAI request.
 - **Prompt injection cannot mutate hidden state:** Only the fixed strict patch is
   considered, application code controls merge, and unknown fields fail. Tool
   results or prose never become mutation commands.
+- **Shopper-derived context is not privilege-elevated:** Resolved constraint
+  values are JSON-escaped in a distinguished `user` message. Static versioned
+  instructions are the only developer-role input, and `ResponseMessage` does not
+  represent developer/system roles.
 - **State and history are bounded:** The schema has fixed fields and a session
   retains six successful pairs only; output and request limits remain in force.
 - **Session data is minimized:** Store the successful user/assistant transcript
@@ -1083,6 +1118,10 @@ CI. If credentials are unavailable, record that it was not run.
   easy-message roles.
 - [x] 2026-09-05: Documented the missing product specification and Phase 5
   baseline branch conflict; created this Phase 6 implementation plan only.
+- [x] 2026-09-05: Architecture review moved shopper-derived resolved-state
+  context from a dynamic developer message to a distinguished user-role data
+  envelope; updated design, milestone, tests, security checks, and decision
+  rationale only, with no implementation work.
 - [ ] Milestone 1 — Establish the Phase 5 baseline and state models.
 - [ ] Milestone 2 — Add the strict constraint-update contract.
 - [ ] Milestone 3 — Implement deterministic normalization and merging.
@@ -1125,9 +1164,10 @@ CI. If credentials are unavailable, record that it was not run.
   set/non-null and clear/null coupling must be validated again in application
   code even when Structured Outputs guarantees the outer shape.
 - Official Responses examples accept manually supplied alternating user and
-  assistant messages. The installed SDK also accepts a developer easy-message
-  role. This matters because backend context can be replayed without preserving
-  response IDs or raw SDK output.
+  assistant messages, and the current API/installed SDK define developer/system
+  roles as higher-priority instructions. This matters because backend context
+  can be replayed as a user-role data envelope without preserving response IDs,
+  raw SDK output, or elevating shopper-derived values to developer authority.
 - Phase 5's grounding set is created inside one `AgentOrchestrator.run` and
   `RecommendationHydrator` independently re-fetches accepted products. This
   matters because adding history does not require weakening or redesigning the
@@ -1188,12 +1228,19 @@ CI. If credentials are unavailable, record that it was not run.
   **Reason:** Unrelated shoppers must not wait behind another session's model
   call. **Consequence:** Different sessions can run concurrently and have wholly
   separate constraints, histories, and counters.
-- **Decision 9 — Backend context transport:** Start each run with one developer
-  state-data message, six or fewer alternating historical user/assistant
-  messages, and the current user message. Assistant history is JSON containing
-  prose and accepted IDs only. **Reason:** This preserves role semantics and
-  supplies structured references without tool/provider replay. **Consequence:**
-  `ResponseRequest` gains only an application-owned message-list input variant.
+- **Decision 9 — Backend context transport:** Start each run with six or fewer
+  alternating historical user/assistant pairs, then one distinguished
+  application-generated `user` message containing the resolved-state JSON
+  envelope, then the current shopper text as the final `user` message. Assistant
+  history is JSON containing prose and accepted IDs only. Static
+  `DEVELOPER_INSTRUCTIONS` remains the sole developer-role content, and
+  `ResponseMessage` represents only user/assistant roles. **Reason:** Constraint
+  values ultimately originate with the shopper, so application serialization
+  should not elevate them to the developer instruction hierarchy; a user-role
+  envelope is the simplest supported lower-trust representation while preserving
+  normal historical roles and explicit structured context. **Consequence:** The
+  model still receives full normalized state and references, but prompt-like
+  values cannot become privileged messages or alter the static instructions.
 - **Decision 10 — Turn-local response IDs:** Keep
   `previous_response_id=None` on every new shopper turn and use IDs only for
   function outputs within that `run`. **Reason:** The backend, not provider
@@ -1286,9 +1333,11 @@ CI. If credentials are unavailable, record that it was not run.
 Planning completed on 2026-09-05. No Phase 6 source, test, contract, fixture,
 configuration, dependency, or runtime behavior has been implemented. This plan
 defines the intended state architecture, strict patch, normalization and merge
-rules, six-turn history, Responses context, transaction boundary, per-session
-locking, current-turn recommendation grounding, trace semantics, tests, and
-validation workflow.
+rules, six-turn history, lower-trust user-role Responses context, transaction
+boundary, per-session locking, current-turn recommendation grounding, trace
+semantics, tests, and validation workflow. The pre-implementation architecture
+review keeps static developer instructions as the only developer-role content;
+shopper-derived resolved state is now a distinguished user-role data envelope.
 
 Implementation remains gated on integrating the completed local Phase 5 branch
 and rechecking any restored `docs/product-spec.md`. Complete this section with

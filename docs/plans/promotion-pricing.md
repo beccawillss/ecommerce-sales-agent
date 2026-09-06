@@ -1086,13 +1086,39 @@ acceptance.
   the first accepted authoritative recommendation, the existing trace fields
   identify that relationship, and earlier-rejection/search-order tests are
   required. No implementation was performed.
-- [ ] Milestone 1 — Strengthen and retain authoritative promotion evidence.
-- [ ] Milestone 2 — Add the strict promotion nomination and Phase 7 prompt.
-- [ ] Milestone 3 — Implement Decimal-safe promotion resolution and pricing.
-- [ ] Milestone 4 — Populate response and trace fields with safe partial
-  behavior.
-- [ ] Milestone 5 — Prove multi-turn and adversarial trust boundaries.
-- [ ] Milestone 6 — Complete documentation, full regression, and manual smoke.
+- [x] 2026-09-06: Milestone 1 — Strengthened `DiscountValidationResult` semantic
+  invariants and canonical codes; retained de-duplicated typed current-turn
+  promotion evidence in orchestration; conflicting evidence fails closed as
+  `invalid_tool_evidence`. The 25 focused promotion/evidence tests pass.
+- [x] 2026-09-06: Milestone 2 — Added required nullable code-only
+  `nominated_promotion_code`, propagated it through orchestration, updated the
+  fixture-independent `phase7-v1` instructions, and kept all commerce facts out
+  of model-authored output. All 79 focused output/client/prompt/orchestrator
+  tests pass.
+- [x] 2026-09-06: Milestone 3 — Added the isolated
+  `PromotionPricingService`, which resolves one exact current-turn promotion
+  nomination, prices only the first accepted hydrated recommendation, and uses
+  discount-first `Decimal` arithmetic with explicit GBP-cent `ROUND_HALF_UP`
+  rounding. Its internal discount amount and safe partial failure outcomes are
+  covered by all 13 focused pricing tests.
+- [x] 2026-09-06: Milestone 4 — Injected promotion/pricing through the
+  application composition root, resolved it only after recommendation
+  hydration, and mapped one immutable outcome into matching response and trace
+  fields. Invalid/inactive/unknown/ungrounded outcomes preserve HTTP 200
+  partial results and add only fixed safe trace errors where applicable. All 13
+  focused chat/API promotion, pricing, discount, and trace tests pass.
+- [x] 2026-09-06: Milestone 5 — Added offline same-session tests proving a
+  follow-up quote needs fresh product grounding and fresh exact-code promotion
+  validation on the same turn. Added adversarial tool-bypass/model-authored
+  pricing rejection, unchanged public-schema, safe pricing-failure trace, and
+  first-accepted targeting coverage. All 18 focused history, injection,
+  authority, contract, promotion, and pricing tests pass.
+- [x] 2026-09-06: Milestone 6 — Updated README and the explicitly optional
+  live smoke for Phase 7 promotion validation, first-card linkage, and pricing
+  consistency. `uv sync` made no dependency changes; 247 offline tests, Ruff
+  lint/format, strict mypy across 32 source files, application import, and
+  `git diff --check` all pass. The billable live smoke was deliberately not run
+  and remains a manual developer acceptance check.
 
 ## Discoveries
 
@@ -1265,7 +1291,56 @@ acceptance.
 
 ## Outcome
 
-Not implemented. Complete this section after Phase 7 ships with the actual
-behavior, validation results, live-smoke status, deviations, and remaining
-limitations. This planning change intentionally creates only
-`docs/plans/promotion-pricing.md`.
+Phase 7 is implemented. A successful current-turn `validate_discount` call now
+produces typed, semantically checked promotion evidence. The strict
+`phase7-v1` final output may nominate one code, but application code matches it
+case-insensitively against that evidence and emits only the canonical commerce
+result. Active, inactive, and unknown outcomes therefore remain grounded in the
+promotion fixture; missing or ungrounded nominations cannot populate structured
+promotion or pricing fields.
+
+Recommendation validation and fresh hydration complete before the new
+`PromotionPricingService` runs. For an active promotion it prices only the first
+accepted authoritative recommendation in preserved final order. Tests prove an
+earlier unknown raw nomination and catalogue search-result order cannot replace
+that target. If no recommendation survives, pricing remains null. The service
+uses `Decimal`, quantizes the discount amount to GBP pennies with
+`ROUND_HALF_UP`, subtracts that rounded amount, and quantizes the final price.
+`discount_amount` remains internal and the card retains its catalogue base
+price.
+
+Response and trace receive the same mapped promotion/pricing values. The
+existing relationship `pricing.product_id == recommended_product_ids[0]`
+identifies the priced card without changing the public contract. Inactive and
+unknown results return HTTP 200 with no price; missing/ungrounded nomination and
+calculation failures return useful HTTP 200 partial results with fixed safe
+trace errors. Provider, malformed-output, orchestration-limit, and conflicting
+evidence failures remain terminal through the existing generic HTTP 500
+boundary. Promotion evidence is not persisted, and same-session tests prove
+that product grounding and promotion validation must both be refreshed on a
+follow-up pricing turn.
+
+Validation completed on 2026-09-06:
+
+- `uv sync` resolved and checked the locked environment without changing
+  dependencies or `uv.lock`.
+- `uv run pytest` passed all 247 offline tests.
+- `uv run ruff check .` passed.
+- `uv run ruff format --check .` reported all 60 files formatted.
+- `uv run mypy src` passed across 32 source files.
+- `uv run python -c "from salesagent.main import app; print(app.title)"` printed
+  `Sales Agent` without requiring an API key.
+- `git diff --check` passed.
+
+There were no material design deviations from the approved ExecPlan. The API
+YAML, API models, fixtures, tool definitions/dispatcher, dependencies, and lock
+file did not need changes. The manual Phase 7 live smoke was not run because it
+is intentionally billable and the execution request explicitly prohibited
+running it automatically; its four offline safety/acceptance tests pass and it
+remains ready for explicit developer invocation.
+
+Remaining limitations are the approved V1 boundaries: only the first accepted
+card can have a public quote because the contract exposes one `PricingResult`;
+promotion eligibility is global because fixtures define no narrower rules;
+free-form prose is not independently rewritten; and session state remains
+process-local. No Phase 8 work was included.

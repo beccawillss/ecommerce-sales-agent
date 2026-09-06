@@ -20,6 +20,7 @@ def valid_payload() -> dict[str, object]:
     return {
         "message": "Ready",
         "nominated_product_ids": [],
+        "nominated_promotion_code": None,
         "constraint_updates": ConstraintUpdates.retain_all().model_dump(mode="json"),
     }
 
@@ -34,6 +35,7 @@ def test_final_output_accepts_retain_all_and_field_specific_updates() -> None:
     changed = AgentFinalOutput(
         message="These fit best.",
         nominated_product_ids=(" JKT-003 ", "JKT-001", "JKT-004"),
+        nominated_promotion_code=" welcome10 ",
         constraint_updates=ConstraintUpdates(
             category=TextUpdate(operation="set", value=" Jackets "),
             activity=None,
@@ -50,6 +52,7 @@ def test_final_output_accepts_retain_all_and_field_specific_updates() -> None:
     assert empty.message == "Which activity?"
     assert empty.constraint_updates == ConstraintUpdates.retain_all()
     assert changed.nominated_product_ids == ("JKT-003", "JKT-001", "JKT-004")
+    assert changed.nominated_promotion_code == "welcome10"
     assert changed.constraint_updates.category is not None
     assert changed.constraint_updates.category.value == "Jackets"
     assert changed.constraint_updates.maximum_price is not None
@@ -96,6 +99,10 @@ def _remove_updates(payload: dict[str, object]) -> None:
     payload.pop("constraint_updates")
 
 
+def _remove_promotion_nomination(payload: dict[str, object]) -> None:
+    payload.pop("nominated_promotion_code")
+
+
 def _remove_priority(payload: dict[str, object]) -> None:
     updates = payload["constraint_updates"]
     assert isinstance(updates, dict)
@@ -115,9 +122,13 @@ def _add_unknown_constraint(payload: dict[str, object]) -> None:
         lambda payload: payload.update(nominated_product_ids=[" "]),
         lambda payload: payload.update(nominated_product_ids=[123]),
         lambda payload: payload.update(nominated_product_ids=["A", "B", "C", "D"]),
+        lambda payload: payload.update(nominated_promotion_code=" "),
+        lambda payload: payload.update(nominated_promotion_code=["WELCOME10"]),
+        lambda payload: payload.update(discount_percent="90"),
         lambda payload: payload.update(price="1.00"),
         _remove_message,
         _remove_updates,
+        _remove_promotion_nomination,
         _remove_priority,
         _add_unknown_constraint,
     ],
@@ -146,6 +157,7 @@ def test_final_output_text_format_is_fresh_and_strict_at_every_object() -> None:
     assert set(schema["required"]) == {
         "message",
         "nominated_product_ids",
+        "nominated_promotion_code",
         "constraint_updates",
     }
 

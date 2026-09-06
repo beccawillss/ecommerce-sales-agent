@@ -33,6 +33,7 @@ from salesagent.agent.tools.models import (
 )
 from salesagent.config import ReasoningEffort
 from salesagent.domain.conversation import SessionState
+from salesagent.domain.models import DiscountValidationResult
 
 OrchestrationErrorCode = Literal[
     "missing_openai_configuration",
@@ -57,7 +58,9 @@ class OrchestrationResult:
 
     final_text: str
     nominated_product_ids: tuple[str, ...]
+    nominated_promotion_code: str | None
     grounded_product_ids: frozenset[str]
+    grounded_promotions: tuple[DiscountValidationResult, ...]
     constraint_updates: ConstraintUpdates
     model: str
     prompt_version: str
@@ -149,6 +152,7 @@ class AgentOrchestrator:
         seen_call_ids: set[str] = set()
         signature_counts: Counter[tuple[str, str]] = Counter()
         grounded_product_ids: dict[str, str] = {}
+        grounded_promotions: dict[str, DiscountValidationResult] = {}
         tool_calls: list[ToolTraceEvidence] = []
         errors: list[TraceErrorEvidence] = []
 
@@ -205,7 +209,9 @@ class AgentOrchestrator:
                 return OrchestrationResult(
                     final_text=final_output.message,
                     nominated_product_ids=final_output.nominated_product_ids,
+                    nominated_promotion_code=final_output.nominated_promotion_code,
                     grounded_product_ids=frozenset(grounded_product_ids.values()),
+                    grounded_promotions=tuple(grounded_promotions.values()),
                     constraint_updates=final_output.constraint_updates,
                     model=self._model,
                     prompt_version=PROMPT_VERSION,
@@ -253,12 +259,22 @@ class AgentOrchestrator:
                 if result.arguments is not None:
                     if result.success:
                         try:
-                            observed_ids = _grounded_ids_from_result(call.name, result)
+                            observed_ids, observed_promotion = _evidence_from_result(
+                                call.name, result
+                            )
                         except (ValidationError, ValueError):
                             fail("invalid_tool_evidence", tool_call_id=call_id)
                         for product_id in observed_ids:
                             grounded_product_ids.setdefault(
                                 product_id.casefold(), product_id
+                            )
+                        if observed_promotion is not None:
+                            promotion_key = observed_promotion.code.casefold()
+                            previous = grounded_promotions.get(promotion_key)
+                            if previous is not None and previous != observed_promotion:
+                                fail("invalid_tool_evidence", tool_call_id=call_id)
+                            grounded_promotions.setdefault(
+                                promotion_key, observed_promotion
                             )
                     tool_calls.append(
                         ToolTraceEvidence(
@@ -335,10 +351,10 @@ def _invalid_arguments(tool_name: str) -> ToolExecutionResult:
     )
 
 
-def _grounded_ids_from_result(
+def _evidence_from_result(
     tool_name: str, result: ToolExecutionResult
-) -> tuple[str, ...]:
-    """Validate successful tool data and return authoritative product IDs."""
+) -> tuple[tuple[str, ...], DiscountValidationResult | None]:
+    """Validate successful tool data and return authoritative turn evidence."""
     if (
         result.tool_name != tool_name
         or result.arguments is None
@@ -351,21 +367,25 @@ def _grounded_ids_from_result(
         search_data = SearchProductsData.model_validate(result.data)
         if search_data.count != len(search_data.products):
             raise ValueError("search result count is inconsistent")
-        return tuple(
-            _validated_product_id(product.product_id)
-            for product in search_data.products
+        return (
+            tuple(
+                _validated_product_id(product.product_id)
+                for product in search_data.products
+            ),
+            None,
         )
     if tool_name == "get_product":
         product_data = ProductData.model_validate(result.data)
-        return (_validated_product_id(product_data.product_id),)
+        return ((_validated_product_id(product_data.product_id),), None)
     if tool_name == "check_inventory":
         inventory_data = InventoryData.model_validate(result.data)
         if inventory_data.status == "product_not_found":
-            return ()
-        return (_validated_product_id(inventory_data.product_id),)
+            return ((), None)
+        return ((_validated_product_id(inventory_data.product_id),), None)
     if tool_name == "validate_discount":
-        DiscountData.model_validate(result.data)
-        return ()
+        discount_data = DiscountData.model_validate(result.data)
+        promotion = DiscountValidationResult.model_validate(discount_data.model_dump())
+        return ((), promotion)
     raise ValueError("successful tool name is not allowlisted")
 
 

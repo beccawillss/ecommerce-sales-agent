@@ -15,11 +15,13 @@ def final_output_json(
     message: str,
     nominated_product_ids: Iterable[str] = (),
     constraint_updates: ConstraintUpdates | None = None,
+    nominated_promotion_code: str | None = None,
 ) -> str:
     """Build valid strict final output without teaching the fake to parse it."""
     return AgentFinalOutput(
         message=message,
         nominated_product_ids=tuple(nominated_product_ids),
+        nominated_promotion_code=nominated_promotion_code,
         constraint_updates=constraint_updates or ConstraintUpdates.retain_all(),
     ).model_dump_json()
 

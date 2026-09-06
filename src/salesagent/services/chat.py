@@ -16,7 +16,9 @@ from salesagent.api.models import (
     ChatRequest,
     ChatResponse,
     ConstraintChange,
+    PricingResult,
     ProductRecommendation,
+    PromotionResult,
     RecommendationValidation,
     ResolvedConstraints,
     TokenUsage,
@@ -29,12 +31,14 @@ from salesagent.domain.conversation import (
     ResolvedConstraintState,
     SessionState,
 )
+from salesagent.domain.models import DiscountValidationResult
 from salesagent.repositories.sessions import InMemorySessionRepository
 from salesagent.repositories.traces import InMemoryTraceRepository
 from salesagent.services.constraints import (
     ConstraintMergeResult,
     ConstraintStateMerger,
 )
+from salesagent.services.pricing import CalculatedPrice, PromotionPricingService
 from salesagent.services.recommendations import (
     HydratedRecommendation,
     RecommendationHydrationResult,
@@ -78,12 +82,14 @@ class ChatService:
         trace_repository: InMemoryTraceRepository,
         orchestrator: AgentOrchestrator,
         recommendation_hydrator: RecommendationHydrator,
+        promotion_pricing_service: PromotionPricingService,
         session_repository: InMemorySessionRepository | None = None,
         constraint_merger: ConstraintStateMerger | None = None,
     ) -> None:
         self._trace_repository = trace_repository
         self._orchestrator = orchestrator
         self._recommendation_hydrator = recommendation_hydrator
+        self._promotion_pricing_service = promotion_pricing_service
         self._session_repository = session_repository or InMemorySessionRepository()
         self._constraint_merger = constraint_merger or ConstraintStateMerger()
 
@@ -126,16 +132,27 @@ class ChatService:
                 result.nominated_product_ids,
                 result.grounded_product_ids,
             )
+            promotion_pricing = self._promotion_pricing_service.resolve(
+                nominated_promotion_code=result.nominated_promotion_code,
+                grounded_promotions=result.grounded_promotions,
+                recommendations=hydration.recommendations,
+            )
             recommendations = [
                 self._map_recommendation(item) for item in hydration.recommendations
             ]
+            promotion = self._map_promotion(promotion_pricing.promotion)
+            pricing = self._map_pricing(promotion_pricing.pricing)
+            pricing_errors = tuple(
+                TraceErrorEvidence(code=item.code, message=item.message)
+                for item in promotion_pricing.errors
+            )
             response = ChatResponse(
                 session_id=session_id,
                 trace_id=trace_id,
                 message=result.final_text,
                 recommendations=recommendations,
-                promotion=None,
-                pricing=None,
+                promotion=promotion,
+                pricing=pricing,
             )
             trace = self._build_trace(
                 trace_id=trace_id,
@@ -146,9 +163,11 @@ class ChatService:
                 prompt_version=result.prompt_version,
                 usage=result.usage,
                 tool_evidence=result.tool_calls,
-                errors=result.errors,
+                errors=(*result.errors, *pricing_errors),
                 started_at=started_at,
                 hydration=hydration,
+                promotion=promotion,
+                pricing=pricing,
                 resolved_constraints=merged.state,
                 constraint_changes=self._map_changes(snapshot, merged),
             )
@@ -182,6 +201,8 @@ class ChatService:
         hydration: RecommendationHydrationResult | None = None,
         resolved_constraints: ResolvedConstraintState | None = None,
         constraint_changes: list[ConstraintChange] | None = None,
+        promotion: PromotionResult | None = None,
+        pricing: PricingResult | None = None,
     ) -> TraceResponse:
         recommendation_validation = (
             RecommendationValidation(
@@ -227,8 +248,8 @@ class ChatService:
             recommended_product_ids=(
                 list(hydration.accepted_product_ids) if hydration is not None else []
             ),
-            promotion=None,
-            pricing=None,
+            promotion=promotion,
+            pricing=pricing,
             latency_ms=0,
             token_usage=TokenUsage(
                 input_tokens=usage.input_tokens,
@@ -259,6 +280,32 @@ class ChatService:
             product_url=recommendation.product_url,
             availability=recommendation.availability,
             matched_variant=None,
+        )
+
+    @staticmethod
+    def _map_promotion(
+        promotion: DiscountValidationResult | None,
+    ) -> PromotionResult | None:
+        if promotion is None:
+            return None
+        return PromotionResult(
+            code=promotion.code,
+            valid=promotion.valid,
+            discount_percent=promotion.discount_percent,
+            reason=promotion.reason,
+        )
+
+    @staticmethod
+    def _map_pricing(pricing: CalculatedPrice | None) -> PricingResult | None:
+        if pricing is None:
+            return None
+        return PricingResult(
+            product_id=pricing.product_id,
+            base_price=pricing.base_price,
+            final_price=pricing.final_price,
+            currency=pricing.currency,
+            discount_code=pricing.discount_code,
+            discount_percent=pricing.discount_percent,
         )
 
     @staticmethod

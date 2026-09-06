@@ -5,8 +5,13 @@ from decimal import Decimal
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
-from salesagent.domain.models import Product, ProductSearchCriteria
+from salesagent.domain.models import (
+    DiscountValidationResult,
+    Product,
+    ProductSearchCriteria,
+)
 from salesagent.repositories.products import ProductRepository
 from salesagent.repositories.promotions import PromotionRepository
 from salesagent.services.commerce import CommerceService
@@ -190,3 +195,58 @@ def test_discount_validation_comes_from_promotion_data(
     assert result.valid is valid
     assert result.discount_percent == discount_percent
     assert result.reason == reason
+
+
+@pytest.mark.parametrize(
+    "values",
+    [
+        {"code": " ", "valid": True, "discount_percent": "10", "reason": "active"},
+        {
+            "code": "WELCOME10",
+            "valid": True,
+            "discount_percent": None,
+            "reason": "active",
+        },
+        {
+            "code": "WELCOME10",
+            "valid": False,
+            "discount_percent": "10",
+            "reason": "active",
+        },
+        {
+            "code": "SUMMER20",
+            "valid": True,
+            "discount_percent": "20",
+            "reason": "inactive",
+        },
+        {
+            "code": "SUMMER20",
+            "valid": False,
+            "discount_percent": "20",
+            "reason": "inactive",
+        },
+        {
+            "code": "UNKNOWN",
+            "valid": False,
+            "discount_percent": "1",
+            "reason": "unknown_code",
+        },
+    ],
+)
+def test_discount_validation_result_rejects_inconsistent_evidence(
+    values: dict[str, object],
+) -> None:
+    with pytest.raises(ValidationError):
+        DiscountValidationResult.model_validate(values)
+
+
+def test_discount_validation_result_canonicalizes_code_and_decimal() -> None:
+    result = DiscountValidationResult(
+        code=" welcome10 ",
+        valid=True,
+        discount_percent="10.5",  # type: ignore[arg-type]
+        reason="active",
+    )
+
+    assert result.code == "WELCOME10"
+    assert result.discount_percent == Decimal("10.5")

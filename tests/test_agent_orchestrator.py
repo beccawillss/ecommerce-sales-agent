@@ -63,6 +63,32 @@ class InvalidEvidenceDispatcher(ToolDispatcher):
         )
 
 
+class ConflictingPromotionEvidenceDispatcher(ToolDispatcher):
+    """Return two well-formed but contradictory results for one code."""
+
+    def __init__(self, commerce: CommerceService) -> None:
+        super().__init__(commerce)
+        self._call_count = 0
+
+    def dispatch(
+        self, tool_name: str, arguments: Mapping[str, object]
+    ) -> ToolExecutionResult:
+        self._call_count += 1
+        return ToolExecutionResult(
+            tool_name=tool_name,
+            success=True,
+            arguments=dict(arguments),
+            data={
+                "code": "WELCOME10",
+                "valid": True,
+                "discount_percent": "10" if self._call_count == 1 else "20",
+                "reason": "active",
+            },
+            error=None,
+            duration_ms=0,
+        )
+
+
 @pytest.fixture
 def dispatcher() -> NoCallDispatcher:
     commerce = CommerceService(
@@ -106,7 +132,9 @@ def test_direct_final_response_preserves_text_configuration_and_usage(
 
     assert result.final_text == "What activity are you shopping for?"
     assert result.nominated_product_ids == ()
+    assert result.nominated_promotion_code is None
     assert result.grounded_product_ids == frozenset()
+    assert result.grounded_promotions == ()
     assert result.model == "gpt-5.6-terra"
     assert result.prompt_version == PROMPT_VERSION
     assert result.usage == usage
@@ -294,6 +322,169 @@ def test_one_tool_call_round_trips_exact_id_and_continues_to_final_text(
     output = continuation.input[0].output
     assert '"success":true' in output
     assert '"valid":false' in output
+
+
+@pytest.mark.parametrize(
+    ("code", "canonical_code", "valid", "percentage", "reason"),
+    [
+        ("welcome10", "WELCOME10", True, Decimal("10"), "active"),
+        ("SUMMER20", "SUMMER20", False, None, "inactive"),
+        ("staff99", "STAFF99", False, None, "unknown_code"),
+    ],
+)
+def test_successful_discount_results_become_typed_current_turn_evidence(
+    dispatcher: NoCallDispatcher,
+    code: str,
+    canonical_code: str,
+    valid: bool,
+    percentage: Decimal | None,
+    reason: str,
+) -> None:
+    client = ScriptedResponsesClient(
+        [
+            ModelResponse(
+                response_id="resp-discount",
+                output_text="",
+                function_calls=(
+                    FunctionCall(
+                        call_id="call-discount",
+                        name="validate_discount",
+                        arguments_json=json.dumps({"code": code}),
+                    ),
+                ),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+            ModelResponse(
+                response_id="resp-final",
+                output_text=final_output_json(
+                    "Validated.", nominated_promotion_code=code
+                ),
+                function_calls=(),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+        ]
+    )
+
+    result = orchestrator(client, dispatcher).run("Validate it")
+
+    assert len(result.grounded_promotions) == 1
+    evidence = result.grounded_promotions[0]
+    assert result.nominated_promotion_code == code
+    assert evidence.code == canonical_code
+    assert evidence.valid is valid
+    assert evidence.discount_percent == percentage
+    assert evidence.reason == reason
+    assert result.grounded_product_ids == frozenset()
+
+
+def test_repeated_case_varied_discount_validation_collapses_identical_evidence(
+    dispatcher: NoCallDispatcher,
+) -> None:
+    client = ScriptedResponsesClient(
+        [
+            ModelResponse(
+                response_id="resp-discounts",
+                output_text="",
+                function_calls=(
+                    FunctionCall(
+                        call_id="call-upper",
+                        name="validate_discount",
+                        arguments_json='{"code":"WELCOME10"}',
+                    ),
+                    FunctionCall(
+                        call_id="call-lower",
+                        name="validate_discount",
+                        arguments_json='{"code":"welcome10"}',
+                    ),
+                ),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+            ModelResponse(
+                response_id="resp-final",
+                output_text=final_output_json("Validated."),
+                function_calls=(),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+        ]
+    )
+
+    result = orchestrator(client, dispatcher).run("Validate twice")
+
+    assert [item.code for item in result.grounded_promotions] == ["WELCOME10"]
+    assert len(result.tool_calls) == 2
+
+
+def test_conflicting_discount_evidence_fails_closed(
+    dispatcher: NoCallDispatcher,
+) -> None:
+    conflicting = ConflictingPromotionEvidenceDispatcher(dispatcher._commerce)
+    client = ScriptedResponsesClient(
+        [
+            ModelResponse(
+                response_id="resp-conflict",
+                output_text="",
+                function_calls=(
+                    FunctionCall(
+                        call_id="call-first",
+                        name="validate_discount",
+                        arguments_json='{"code":"WELCOME10"}',
+                    ),
+                    FunctionCall(
+                        call_id="call-second",
+                        name="validate_discount",
+                        arguments_json='{"code":"welcome10"}',
+                    ),
+                ),
+                usage=ResponseUsage(),
+                status="completed",
+            )
+        ]
+    )
+
+    with pytest.raises(AgentOrchestrationError) as captured:
+        orchestrator(client, conflicting).run("Validate twice")
+
+    assert captured.value.code == "invalid_tool_evidence"
+    assert captured.value.tool_call_id == "call-second"
+    assert [item.call_id for item in captured.value.tool_calls] == ["call-first"]
+
+
+def test_rejected_discount_arguments_do_not_create_promotion_evidence(
+    dispatcher: NoCallDispatcher,
+) -> None:
+    client = ScriptedResponsesClient(
+        [
+            ModelResponse(
+                response_id="resp-invalid-discount",
+                output_text="",
+                function_calls=(
+                    FunctionCall(
+                        call_id="call-invalid-discount",
+                        name="validate_discount",
+                        arguments_json="{}",
+                    ),
+                ),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+            ModelResponse(
+                response_id="resp-final",
+                output_text=final_output_json("I could not validate that."),
+                function_calls=(),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+        ]
+    )
+
+    result = orchestrator(client, dispatcher).run("Validate it")
+
+    assert result.grounded_promotions == ()
+    assert result.errors[0].code == "invalid_arguments"
 
 
 def test_sequential_responses_chain_to_immediately_preceding_id(

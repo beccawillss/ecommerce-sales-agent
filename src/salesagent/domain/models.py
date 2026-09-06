@@ -160,7 +160,29 @@ class InventoryResult(CommerceModel):
 class DiscountValidationResult(CommerceModel):
     """Explicit outcome from validating a submitted promotion code."""
 
-    code: str
+    code: str = Field(min_length=1)
     valid: bool
     discount_percent: Percentage | None = None
     reason: Literal["active", "inactive", "unknown_code"]
+
+    @field_validator("code")
+    @classmethod
+    def normalise_result_code(cls, value: str) -> str:
+        """Retain one canonical comparison/display form for validated codes."""
+        value = value.strip().upper()
+        if not value:
+            raise ValueError("promotion code must not be blank")
+        return value
+
+    @model_validator(mode="after")
+    def result_is_semantically_consistent(self) -> "DiscountValidationResult":
+        """Reject evidence whose validity, reason, and percentage disagree."""
+        if self.valid and self.reason == "active" and self.discount_percent is not None:
+            return self
+        if (
+            not self.valid
+            and self.reason in {"inactive", "unknown_code"}
+            and self.discount_percent is None
+        ):
+            return self
+        raise ValueError("discount validation result is inconsistent")

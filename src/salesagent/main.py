@@ -19,6 +19,7 @@ from salesagent.repositories.traces import InMemoryTraceRepository
 from salesagent.services.chat import ChatService
 from salesagent.services.commerce import CommerceService
 from salesagent.services.constraints import ConstraintStateMerger
+from salesagent.services.pricing import PromotionPricingService
 from salesagent.services.recommendations import RecommendationHydrator
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -69,6 +70,7 @@ def create_app(
         trace_repository,
         orchestrator,
         RecommendationHydrator(commerce_service),
+        PromotionPricingService(),
         session_repository,
         ConstraintStateMerger(),
     )

@@ -1,7 +1,7 @@
 """Tests for chat response assembly and safe trace persistence."""
 
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from threading import Event
@@ -25,13 +25,22 @@ from salesagent.agent.responses_client import (
 from salesagent.agent.tools.dispatcher import ToolDispatcher
 from salesagent.agent.tools.models import ToolExecutionResult
 from salesagent.api.models import ChatRequest
+from salesagent.domain.models import DiscountValidationResult
 from salesagent.repositories.products import ProductRepository
 from salesagent.repositories.promotions import PromotionRepository
 from salesagent.repositories.sessions import InMemorySessionRepository
 from salesagent.repositories.traces import InMemoryTraceRepository
 from salesagent.services.chat import ChatService, ChatServiceError
 from salesagent.services.commerce import CommerceService
-from salesagent.services.recommendations import RecommendationHydrator
+from salesagent.services.pricing import (
+    PromotionPricingError,
+    PromotionPricingOutcome,
+    PromotionPricingService,
+)
+from salesagent.services.recommendations import (
+    HydratedRecommendation,
+    RecommendationHydrator,
+)
 from tests.fakes import ScriptedResponsesClient, final_output_json
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -61,8 +70,33 @@ class InvalidEvidenceDispatcher(ToolDispatcher):
         )
 
 
+class FailingPromotionPricingService(PromotionPricingService):
+    """Return the service's fixed safe calculation-failure outcome."""
+
+    def resolve(
+        self,
+        *,
+        nominated_promotion_code: str | None,
+        grounded_promotions: Iterable[DiscountValidationResult],
+        recommendations: Iterable[HydratedRecommendation],
+    ) -> PromotionPricingOutcome:
+        del nominated_promotion_code, recommendations
+        promotion = tuple(grounded_promotions)[0]
+        return PromotionPricingOutcome(
+            promotion=promotion,
+            pricing=None,
+            errors=(
+                PromotionPricingError(
+                    code="pricing_calculation_failed",
+                    message="Authoritative pricing could not be calculated safely.",
+                ),
+            ),
+        )
+
+
 def service_for(
     model_client: ScriptedResponsesClient,
+    pricing_service: PromotionPricingService | None = None,
 ) -> tuple[ChatService, InMemoryTraceRepository]:
     commerce = CommerceService(
         ProductRepository(ROOT / "data" / "products.json"),
@@ -77,7 +111,12 @@ def service_for(
         max_output_tokens=2000,
     )
     return (
-        ChatService(repository, orchestrator, RecommendationHydrator(commerce)),
+        ChatService(
+            repository,
+            orchestrator,
+            RecommendationHydrator(commerce),
+            pricing_service or PromotionPricingService(),
+        ),
         repository,
     )
 
@@ -109,6 +148,7 @@ def stateful_service_for(
             traces,
             orchestrator,
             RecommendationHydrator(commerce),
+            PromotionPricingService(),
             sessions,
         ),
         traces,
@@ -155,7 +195,12 @@ def test_chat_service_persists_ordered_authoritative_tool_trace() -> None:
         reasoning_effort="low",
         max_output_tokens=2000,
     )
-    service = ChatService(repository, orchestrator, RecommendationHydrator(commerce))
+    service = ChatService(
+        repository,
+        orchestrator,
+        RecommendationHydrator(commerce),
+        PromotionPricingService(),
+    )
 
     response = service.chat(
         ChatRequest(session_id="session-trace", message="Tell me about JKT-001")
@@ -178,7 +223,7 @@ def test_chat_service_persists_ordered_authoritative_tool_trace() -> None:
     assert trace.session_id == "session-trace"
     assert trace.turn_index == 1
     assert trace.model == "gpt-5.6-terra"
-    assert trace.prompt_version == "phase6-v2"
+    assert trace.prompt_version == "phase7-v1"
     assert trace.token_usage.input_tokens == 18
     assert trace.token_usage.output_tokens == 8
     assert trace.token_usage.total_tokens == 26
@@ -232,7 +277,12 @@ def test_chat_service_persists_safe_failure_trace_before_raising() -> None:
         reasoning_effort="low",
         max_output_tokens=2000,
     )
-    service = ChatService(repository, orchestrator, RecommendationHydrator(commerce))
+    service = ChatService(
+        repository,
+        orchestrator,
+        RecommendationHydrator(commerce),
+        PromotionPricingService(),
+    )
 
     with pytest.raises(ChatServiceError) as captured:
         service.chat(ChatRequest(message="Trigger a provider failure"))
@@ -241,7 +291,7 @@ def test_chat_service_persists_safe_failure_trace_before_raising() -> None:
     trace = repository.get(captured.value.trace_id)
     assert trace is not None
     assert trace.model == "gpt-5.6-terra"
-    assert trace.prompt_version == "phase6-v2"
+    assert trace.prompt_version == "phase7-v1"
     assert trace.tool_calls == []
     assert trace.token_usage.total_tokens == 0
     assert trace.errors[-1].code == "openai_unavailable"
@@ -295,6 +345,244 @@ def test_chat_service_returns_valid_subset_and_separate_validation_evidence() ->
         "unknown_product_id:UNKNOWN",
     ]
     assert trace.errors == []
+
+
+def test_pricing_follows_first_accepted_recommendation_not_raw_or_search_order() -> (
+    None
+):
+    model_client = ScriptedResponsesClient(
+        [
+            ModelResponse(
+                response_id="resp-grounding",
+                output_text="",
+                function_calls=(
+                    FunctionCall(
+                        call_id="call-search",
+                        name="search_products",
+                        arguments_json='{"category":"jacket"}',
+                    ),
+                    FunctionCall(
+                        call_id="call-discount",
+                        name="validate_discount",
+                        arguments_json='{"code":"welcome10"}',
+                    ),
+                ),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+            ModelResponse(
+                response_id="resp-final",
+                output_text=final_output_json(
+                    "Two verified options.",
+                    ["UNKNOWN", "JKT-003", "JKT-001"],
+                    nominated_promotion_code=" welcome10 ",
+                ),
+                function_calls=(),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+        ]
+    )
+    service, repository = service_for(model_client)
+
+    response = service.chat(ChatRequest(message="Use WELCOME10 on a jacket"))
+    trace = repository.get(response.trace_id)
+
+    assert [item.product_id for item in response.recommendations] == [
+        "JKT-003",
+        "JKT-001",
+    ]
+    assert response.recommendations[0].price == 110
+    assert response.promotion is not None
+    assert response.promotion.model_dump() == {
+        "code": "WELCOME10",
+        "valid": True,
+        "discount_percent": 10,
+        "reason": "active",
+    }
+    assert response.pricing is not None
+    assert response.pricing.model_dump() == {
+        "product_id": "JKT-003",
+        "base_price": 110,
+        "final_price": 99,
+        "currency": "GBP",
+        "discount_code": "WELCOME10",
+        "discount_percent": 10,
+    }
+    assert trace is not None
+    assert trace.recommended_product_ids == ["JKT-003", "JKT-001"]
+    assert trace.recommendation_validation.validation_errors == [
+        "unknown_product_id:UNKNOWN"
+    ]
+    assert trace.promotion == response.promotion
+    assert trace.pricing == response.pricing
+    assert trace.pricing.product_id == trace.recommended_product_ids[0]
+
+
+@pytest.mark.parametrize(
+    ("code", "valid", "reason"),
+    [
+        ("SUMMER20", False, "inactive"),
+        ("STAFF99", False, "unknown_code"),
+    ],
+)
+def test_invalid_promotion_is_authoritative_partial_result_without_pricing(
+    code: str,
+    valid: bool,
+    reason: str,
+) -> None:
+    model_client = ScriptedResponsesClient(
+        [
+            ModelResponse(
+                response_id="resp-discount",
+                output_text="",
+                function_calls=(
+                    FunctionCall(
+                        call_id="call-discount",
+                        name="validate_discount",
+                        arguments_json=json.dumps({"code": code}),
+                    ),
+                ),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+            ModelResponse(
+                response_id="resp-final",
+                output_text=final_output_json(
+                    "The promotion was checked.",
+                    nominated_promotion_code=code,
+                ),
+                function_calls=(),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+        ]
+    )
+    service, repository = service_for(model_client)
+
+    response = service.chat(ChatRequest(message=f"Can I use {code}?"))
+    trace = repository.get(response.trace_id)
+
+    assert response.promotion is not None
+    assert response.promotion.code == code
+    assert response.promotion.valid is valid
+    assert response.promotion.reason == reason
+    assert response.promotion.discount_percent is None
+    assert response.pricing is None
+    assert trace is not None
+    assert trace.promotion == response.promotion
+    assert trace.pricing is None
+    assert trace.errors == []
+
+
+@pytest.mark.parametrize(
+    ("nominated_code", "expected_error"),
+    [
+        (None, "promotion_nomination_missing"),
+        ("STAFF99", "ungrounded_promotion_code"),
+    ],
+)
+def test_promotion_nomination_failures_preserve_safe_http_result_and_trace_error(
+    nominated_code: str | None,
+    expected_error: str,
+) -> None:
+    model_client = ScriptedResponsesClient(
+        [
+            ModelResponse(
+                response_id="resp-discount",
+                output_text="",
+                function_calls=(
+                    FunctionCall(
+                        call_id="call-discount",
+                        name="validate_discount",
+                        arguments_json='{"code":"WELCOME10"}',
+                    ),
+                ),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+            ModelResponse(
+                response_id="resp-final",
+                output_text=final_output_json(
+                    "No grounded structured promotion is selected.",
+                    nominated_promotion_code=nominated_code,
+                ),
+                function_calls=(),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+        ]
+    )
+    service, repository = service_for(model_client)
+
+    response = service.chat(ChatRequest(message="Apply a promotion"))
+    trace = repository.get(response.trace_id)
+
+    assert response.promotion is None
+    assert response.pricing is None
+    assert trace is not None
+    assert [error.code for error in trace.errors] == [expected_error]
+    assert "WELCOME10" not in trace.errors[0].message
+    assert "STAFF99" not in trace.errors[0].message
+
+
+def test_pricing_calculation_failure_preserves_promotion_and_redacts_trace() -> None:
+    model_client = ScriptedResponsesClient(
+        [
+            ModelResponse(
+                response_id="resp-tools",
+                output_text="",
+                function_calls=(
+                    FunctionCall(
+                        call_id="call-product",
+                        name="get_product",
+                        arguments_json='{"product_id":"JKT-001"}',
+                    ),
+                    FunctionCall(
+                        call_id="call-discount",
+                        name="validate_discount",
+                        arguments_json='{"code":"WELCOME10"}',
+                    ),
+                ),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+            ModelResponse(
+                response_id="resp-final",
+                output_text=final_output_json(
+                    "A safe partial result remains available.",
+                    ["JKT-001"],
+                    nominated_promotion_code="WELCOME10",
+                ),
+                function_calls=(),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+        ]
+    )
+    service, repository = service_for(
+        model_client,
+        FailingPromotionPricingService(),
+    )
+
+    response = service.chat(ChatRequest(message="Apply the promotion"))
+    trace = repository.get(response.trace_id)
+
+    assert [item.product_id for item in response.recommendations] == ["JKT-001"]
+    assert response.promotion is not None
+    assert response.promotion.code == "WELCOME10"
+    assert response.pricing is None
+    assert trace is not None
+    assert trace.promotion == response.promotion
+    assert trace.pricing is None
+    assert [error.model_dump() for error in trace.errors] == [
+        {
+            "code": "pricing_calculation_failed",
+            "message": "Authoritative pricing could not be calculated safely.",
+            "tool_call_id": None,
+        }
+    ]
+    assert "exception" not in trace.model_dump_json().casefold()
 
 
 def test_chat_service_maps_all_authoritative_product_availability_states() -> None:
@@ -369,7 +657,12 @@ def test_invalid_tool_evidence_persists_only_safe_terminal_trace() -> None:
         reasoning_effort="low",
         max_output_tokens=2000,
     )
-    service = ChatService(repository, orchestrator, RecommendationHydrator(commerce))
+    service = ChatService(
+        repository,
+        orchestrator,
+        RecommendationHydrator(commerce),
+        PromotionPricingService(),
+    )
 
     with pytest.raises(ChatServiceError) as captured:
         service.chat(ChatRequest(message="Trigger invalid evidence"))
@@ -581,6 +874,7 @@ def test_same_session_chat_transactions_do_not_lose_concurrent_updates() -> None
             max_output_tokens=2000,
         ),
         RecommendationHydrator(commerce),
+        PromotionPricingService(),
         sessions,
     )
 
@@ -684,3 +978,149 @@ def test_historical_cards_need_fresh_current_turn_grounding_in_followups() -> No
     historical_assistant = model_client.requests[2].input[1]
     assert '"recommended_product_ids":["JKT-001"]' in historical_assistant.content
     assert sessions.get_state("followup").history[1].recommended_product_ids == ()
+
+
+def test_followup_pricing_requires_fresh_product_and_promotion_evidence() -> None:
+    model_client = ScriptedResponsesClient(
+        [
+            ModelResponse(
+                response_id="turn-1-tool",
+                output_text="",
+                function_calls=(
+                    FunctionCall(
+                        call_id="turn-1-get",
+                        name="get_product",
+                        arguments_json='{"product_id":"JKT-001"}',
+                    ),
+                ),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+            ModelResponse(
+                response_id="turn-1-final",
+                output_text=final_output_json("First card.", ["JKT-001"]),
+                function_calls=(),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+            ModelResponse(
+                response_id="turn-2-tools",
+                output_text="",
+                function_calls=(
+                    FunctionCall(
+                        call_id="turn-2-get",
+                        name="get_product",
+                        arguments_json='{"product_id":"JKT-001"}',
+                    ),
+                    FunctionCall(
+                        call_id="turn-2-discount",
+                        name="validate_discount",
+                        arguments_json='{"code":"WELCOME10"}',
+                    ),
+                ),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+            ModelResponse(
+                response_id="turn-2-final",
+                output_text=final_output_json(
+                    "WELCOME10 was freshly checked for the refreshed card.",
+                    ["JKT-001"],
+                    nominated_promotion_code="WELCOME10",
+                ),
+                function_calls=(),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+            ModelResponse(
+                response_id="turn-3-tool",
+                output_text="",
+                function_calls=(
+                    FunctionCall(
+                        call_id="turn-3-get",
+                        name="get_product",
+                        arguments_json='{"product_id":"JKT-001"}',
+                    ),
+                ),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+            ModelResponse(
+                response_id="turn-3-final",
+                output_text=final_output_json(
+                    "The prior code is only historical context.",
+                    ["JKT-001"],
+                    nominated_promotion_code="WELCOME10",
+                ),
+                function_calls=(),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+            ModelResponse(
+                response_id="turn-4-tool",
+                output_text="",
+                function_calls=(
+                    FunctionCall(
+                        call_id="turn-4-discount",
+                        name="validate_discount",
+                        arguments_json='{"code":"WELCOME10"}',
+                    ),
+                ),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+            ModelResponse(
+                response_id="turn-4-final",
+                output_text=final_output_json(
+                    "The product still needs a current-turn refresh.",
+                    ["JKT-001"],
+                    nominated_promotion_code="WELCOME10",
+                ),
+                function_calls=(),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+        ]
+    )
+    service, traces, _ = stateful_service_for(model_client)
+
+    first = service.chat(ChatRequest(session_id="priced-followup", message="Show it"))
+    second = service.chat(
+        ChatRequest(session_id="priced-followup", message="Apply WELCOME10")
+    )
+    third = service.chat(
+        ChatRequest(session_id="priced-followup", message="Use that code again")
+    )
+    fourth = service.chat(
+        ChatRequest(session_id="priced-followup", message="Validate the code only")
+    )
+    third_trace = traces.get(third.trace_id)
+    fourth_trace = traces.get(fourth.trace_id)
+
+    assert first.pricing is None
+    assert second.promotion is not None
+    assert second.pricing is not None
+    assert second.pricing.product_id == "JKT-001"
+    assert second.pricing.final_price == 130.5
+    assert [item.product_id for item in third.recommendations] == ["JKT-001"]
+    assert third.promotion is None
+    assert third.pricing is None
+    assert third_trace is not None
+    assert [error.code for error in third_trace.errors] == ["ungrounded_promotion_code"]
+    assert fourth.recommendations == []
+    assert fourth.promotion is not None
+    assert fourth.promotion.valid is True
+    assert fourth.pricing is None
+    assert fourth_trace is not None
+    assert fourth_trace.recommendation_validation.validation_errors == [
+        "ungrounded_product_id:JKT-001"
+    ]
+    initial_request_ids = [
+        model_client.requests[index].previous_response_id for index in (0, 2, 4, 6)
+    ]
+    assert initial_request_ids == [
+        None,
+        None,
+        None,
+        None,
+    ]

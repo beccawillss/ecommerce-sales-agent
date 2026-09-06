@@ -117,15 +117,16 @@ def test_success_without_grounded_recommendation_fails_acceptance(
     assert result == 1
     captured = capsys.readouterr()
     assert captured.out.startswith(
-        "Live smoke completed without required Phase 6 state/evidence.\n"
+        "Live smoke completed without required Phase 7 state/evidence.\n"
         "failed_acceptance_checks: "
         "turn_1_maximum_price,turn_2_maximum_price_retained,"
         "turn_2_colour_present,turn_3_maximum_price,"
         "turn_1_maximum_price_change,turn_2_colour_change,"
         "turn_3_maximum_price_change,turn_3_tool_calls,"
-        "turn_3_recommendations\n"
+        "turn_3_recommendations,turn_3_validate_discount,"
+        "turn_3_active_promotion,turn_3_pricing_consistent\n"
     )
-    assert "turn_1_prompt_version: phase6-v2\n" in captured.out
+    assert "turn_1_prompt_version: phase7-v1\n" in captured.out
     assert "turn_1_tool_count: 1\n" in captured.out
     assert "turn_1_grounded_product_ids: JKT-003\n" in captured.out
     assert "turn_1_changed_fields: \n" in captured.out
@@ -206,6 +207,11 @@ def test_success_prints_only_safe_response_and_trace_summary(
                             '"maximum_price":"120.00","in_stock_only":true}'
                         ),
                     ),
+                    FunctionCall(
+                        call_id="call-third-discount",
+                        name="validate_discount",
+                        arguments_json='{"code":"WELCOME10"}',
+                    ),
                 ),
                 usage=ResponseUsage(total_tokens=10),
                 status="completed",
@@ -218,6 +224,7 @@ def test_success_prints_only_safe_response_and_trace_summary(
                     constraint_updates(
                         maximum_price=MoneyTextUpdate(operation="set", value="120.00")
                     ),
+                    nominated_promotion_code="WELCOME10",
                 ),
                 function_calls=(),
                 usage=ResponseUsage(total_tokens=10),
@@ -234,7 +241,7 @@ def test_success_prints_only_safe_response_and_trace_summary(
     assert result == 0
     captured = capsys.readouterr()
     assert "model: gpt-5.6-terra\n" in captured.out
-    assert "prompt_version: phase6-v2\n" in captured.out
+    assert "prompt_version: phase7-v1\n" in captured.out
     assert "turn_indices: 1,2,3\n" in captured.out
     assert (
         "turn_1_changed_fields: category,activity,weather,maximum_price\n"
@@ -242,9 +249,14 @@ def test_success_prints_only_safe_response_and_trace_summary(
     )
     assert "turn_2_changed_fields: colour\n" in captured.out
     assert "turn_3_changed_fields: maximum_price\n" in captured.out
-    assert "tool_calls: 2\n" in captured.out
+    assert "tool_calls: 3\n" in captured.out
     assert "recommendations: 1\n" in captured.out
     assert "recommendation_ids: JKT-003\n" in captured.out
+    assert "promotion_code: WELCOME10\n" in captured.out
+    assert "promotion_valid: true\n" in captured.out
+    assert "promotion_reason: active\n" in captured.out
+    assert "pricing_product_id: JKT-003\n" in captured.out
+    assert "pricing_consistent: true\n" in captured.out
     assert "total_tokens: 51\n" in captured.out
     assert "A grounded option" not in captured.out
     assert "waterproof hiking" not in captured.out

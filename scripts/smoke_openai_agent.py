@@ -1,5 +1,6 @@
-"""Explicit, optional live smoke check for Phase 6 conversation state."""
+"""Explicit, optional live smoke check for Phase 7 promotion pricing."""
 
+from decimal import ROUND_HALF_UP, Decimal
 from typing import cast
 
 from salesagent.agent.responses_client import ResponsesClient
@@ -8,7 +9,7 @@ from salesagent.agent.tools.models import (
     ProductData,
     SearchProductsData,
 )
-from salesagent.api.models import ChatRequest, TraceResponse
+from salesagent.api.models import ChatRequest, ChatResponse, TraceResponse
 from salesagent.config import Settings
 from salesagent.main import create_app
 from salesagent.repositories.traces import InMemoryTraceRepository
@@ -17,8 +18,10 @@ from salesagent.services.chat import ChatService, ChatServiceError
 SMOKE_MESSAGES = (
     "I need a waterproof hiking jacket under £160.",
     "I'd prefer blue. Keep my other requirements.",
-    "Actually make the budget £120 and recommend the best matching jacket.",
+    "Actually make the budget £120, recommend the best match, and apply WELCOME10.",
 )
+
+GBP_QUANTUM = Decimal("0.01")
 
 
 def _non_empty_constraint_fields(trace: TraceResponse) -> list[str]:
@@ -57,6 +60,41 @@ def _grounded_product_ids(trace: TraceResponse) -> list[str]:
     return list(grounded_ids.values())
 
 
+def _pricing_is_consistent(
+    response: ChatResponse,
+    trace: TraceResponse,
+) -> bool:
+    """Check Phase 7 relationships without printing authoritative amounts."""
+    promotion = response.promotion
+    pricing = response.pricing
+    if (
+        promotion is None
+        or pricing is None
+        or trace.promotion != promotion
+        or trace.pricing != pricing
+        or not response.recommendations
+        or not trace.recommended_product_ids
+        or pricing.product_id != response.recommendations[0].product_id
+        or pricing.product_id != trace.recommended_product_ids[0]
+        or pricing.base_price != response.recommendations[0].price
+        or pricing.discount_code != promotion.code
+        or pricing.discount_percent != promotion.discount_percent
+        or pricing.discount_percent is None
+    ):
+        return False
+    discount = (
+        pricing.base_price * pricing.discount_percent / Decimal("100")
+    ).quantize(
+        GBP_QUANTUM,
+        rounding=ROUND_HALF_UP,
+    )
+    expected_final = (pricing.base_price - discount).quantize(
+        GBP_QUANTUM,
+        rounding=ROUND_HALF_UP,
+    )
+    return pricing.final_price == expected_final
+
+
 def _print_safe_failure_diagnostics(
     traces: list[TraceResponse],
     final_recommendation_ids: list[str],
@@ -71,6 +109,8 @@ def _print_safe_failure_diagnostics(
         recommendation_ids = trace.recommended_product_ids
         grounded_product_ids = _grounded_product_ids(trace)
         validation_errors = trace.recommendation_validation.validation_errors
+        promotion = trace.promotion
+        pricing = trace.pricing
         print(f"turn_{turn_index}_prompt_version: {trace.prompt_version}")
         print(f"turn_{turn_index}_tool_count: {len(tool_names)}")
         print(f"turn_{turn_index}_tool_names: {','.join(tool_names)}")
@@ -86,6 +126,18 @@ def _print_safe_failure_diagnostics(
         print(
             f"turn_{turn_index}_recommendation_validation_errors: "
             f"{','.join(validation_errors)}"
+        )
+        print(
+            f"turn_{turn_index}_promotion_code: "
+            f"{promotion.code if promotion is not None else ''}"
+        )
+        print(
+            f"turn_{turn_index}_promotion_reason: "
+            f"{promotion.reason if promotion is not None else ''}"
+        )
+        print(
+            f"turn_{turn_index}_pricing_product_id: "
+            f"{pricing.product_id if pricing is not None else ''}"
         )
     print(f"final_response_recommendation_ids: {','.join(final_recommendation_ids)}")
 
@@ -178,11 +230,27 @@ def run_live_smoke(
                 "turn_3_recommendations_match_trace",
                 recommendation_ids == final_trace.recommended_product_ids,
             ),
+            (
+                "turn_3_validate_discount",
+                "validate_discount"
+                in [tool_call.tool_name for tool_call in final_trace.tool_calls],
+            ),
+            (
+                "turn_3_active_promotion",
+                final_response.promotion is not None
+                and final_response.promotion.code == "WELCOME10"
+                and final_response.promotion.valid
+                and final_response.promotion.reason == "active",
+            ),
+            (
+                "turn_3_pricing_consistent",
+                _pricing_is_consistent(final_response, final_trace),
+            ),
         )
         if not passed
     ]
     if failed_checks:
-        print("Live smoke completed without required Phase 6 state/evidence.")
+        print("Live smoke completed without required Phase 7 state/evidence.")
         _print_safe_failure_diagnostics(traces, recommendation_ids, failed_checks)
         return 1
 
@@ -195,6 +263,13 @@ def run_live_smoke(
     print(f"tool_calls: {sum(len(trace.tool_calls) for trace in traces)}")
     print(f"recommendations: {len(recommendation_ids)}")
     print(f"recommendation_ids: {','.join(recommendation_ids)}")
+    assert final_response.promotion is not None
+    assert final_response.pricing is not None
+    print(f"promotion_code: {final_response.promotion.code}")
+    print(f"promotion_valid: {str(final_response.promotion.valid).lower()}")
+    print(f"promotion_reason: {final_response.promotion.reason}")
+    print(f"pricing_product_id: {final_response.pricing.product_id}")
+    print("pricing_consistent: true")
     print(f"total_tokens: {sum(trace.token_usage.total_tokens for trace in traces)}")
     print(f"latency_ms: {sum(trace.latency_ms for trace in traces)}")
     return 0

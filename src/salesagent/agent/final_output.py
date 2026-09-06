@@ -96,10 +96,11 @@ class ConstraintUpdates(StrictOutputModel):
 
 
 class AgentFinalOutput(StrictOutputModel):
-    """Untrusted prose and product-ID nominations returned by the model."""
+    """Untrusted prose and commerce nominations returned by the model."""
 
     message: NonBlankText
     nominated_product_ids: tuple[NonBlankText, ...] = Field(max_length=3)
+    nominated_promotion_code: NonBlankText | None
     constraint_updates: ConstraintUpdates
 
 
@@ -116,8 +117,8 @@ def final_output_text_format() -> dict[str, object]:
         "type": "json_schema",
         "name": "agent_final_output",
         "description": (
-            "Final shopper-facing message, grounded product nominations, and "
-            "explicit shopper-constraint updates."
+            "Final shopper-facing message, grounded product and promotion "
+            "nominations, and explicit shopper-constraint updates."
         ),
         "strict": True,
         "schema": schema,

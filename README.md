@@ -1,8 +1,8 @@
 # Sales Agent
 
-Sales Agent is an AI-powered sales concierge for a fictional outdoor retailer. Phase 6 uses the OpenAI Responses API to produce a strict final object containing shopper-facing text, up to three nominated catalogue product IDs, and explicit shopper-constraint updates after calling four validated, read-only commerce tools through a bounded application-owned orchestration loop.
+Sales Agent is an AI-powered sales concierge for a fictional outdoor retailer. Phase 7 uses the OpenAI Responses API to produce a strict final object containing shopper-facing text, up to three nominated catalogue product IDs, one nullable promotion-code nomination, and explicit shopper-constraint updates after calling four validated, read-only commerce tools through a bounded application-owned orchestration loop.
 
-The model can nominate IDs and identify explicit constraint changes only. Application code owns deterministic retain/set/clear merging and requires nominated IDs to have appeared in successful authoritative commerce-tool results during the current turn. It re-fetches accepted nominations through `CommerceService` and hydrates product cards only from current deterministic catalogue data. Pricing application remains out of scope.
+The model can nominate product IDs and a promotion code, and identify explicit constraint changes. It cannot author promotion validity, percentages, product facts, or prices. Application code owns deterministic retain/set/clear merging, current-turn evidence matching, recommendation hydration, and pricing.
 
 ## Current behavior
 
@@ -12,7 +12,11 @@ The model can nominate IDs and identify explicit constraint changes only. Applic
 
 Commerce remains authoritative. The orchestration layer never reads catalogue or promotion fixtures directly: every model-selected tool name and argument object passes through the existing allowlisted, Pydantic-validated dispatcher. Tool results preserve exact decimal strings. Unknown, duplicate, and current-turn-ungrounded nominations are omitted and recorded as bounded validation evidence in the trace.
 
-Every emitted card's canonical ID, name, Decimal price, currency, URL, and availability comes from a fresh commerce lookup. Product availability is `in_stock` when every variant has stock, `out_of_stock` when every variant is empty, and `partial` when stocked and empty variants are mixed. Phase 5 does not select an exact variant, so `matched_variant` remains `null`; `promotion` and `pricing` also remain `null`.
+Every emitted card's canonical ID, name, Decimal price, currency, URL, and availability comes from a fresh commerce lookup. Product availability is `in_stock` when every variant has stock, `out_of_stock` when every variant is empty, and `partial` when stocked and empty variants are mixed. Phase 5 does not select an exact variant, so `matched_variant` remains `null`.
+
+A structured promotion is returned only when its nominated code matches successful `validate_discount` evidence from the current turn. Active promotion pricing is calculated after recommendation validation and hydration, using the first accepted recommendation in its preserved final order. Earlier rejected, unknown, duplicate, or ungrounded product nominations cannot become the pricing target, and a valid promotion without an accepted recommendation has no price. The pricing service uses `Decimal`, rounds the discount amount to GBP pennies with `ROUND_HALF_UP`, then subtracts and rounds the final price. The discount amount remains internal because the V1 API contract does not expose it.
+
+Inactive and unknown promotion codes are HTTP 200 business outcomes with `valid=false` and no pricing. Missing or ungrounded promotion selections and safe pricing-calculation failures also preserve useful cards as HTTP 200 partial results and add fixed trace error categories. Provider, malformed-output, orchestration-limit, and evidence-integrity failures retain the generic HTTP 500 boundary. Response and trace use the existing singular `pricing.product_id`; when pricing exists it equals the trace's first `recommended_product_ids` entry. Promotion evidence is never persisted as cross-turn authority, so a follow-up quote must freshly ground both its product and promotion.
 
 One shopper turn is limited to six Responses calls, eight custom function attempts, and two occurrences of the same canonical tool-and-arguments signature. `previous_response_id` is used only inside that turn; a new `POST /api/v1/chat` starts with no OpenAI conversation state from earlier session turns. The backend instead owns complete normalized constraints and retains only the newest six successful user/assistant pairs plus IDs of cards actually returned. Failed turns consume a trace turn index but do not update constraints or history.
 
@@ -70,10 +74,10 @@ uv run mypy src
 
 ## Optional live smoke check
 
-After offline checks pass, a developer may explicitly run one grounded recommendation smoke check:
+After offline checks pass, a developer may explicitly run one grounded promotion-and-pricing smoke check:
 
 ```bash
 OPENAI_API_KEY=... uv run python scripts/smoke_openai_agent.py
 ```
 
-This command may incur OpenAI API charges. It is not a pytest test or CI requirement. It passes only when the provider accepts the exact strict Phase 6 format and bounded message context, completes its same-session constraint scenario, and emits a currently grounded authoritative card whose IDs match the trace. On success it prints only safe field names, counts, canonical accepted IDs, model/prompt version, turn indices, token totals, and latency. On a classified failure it prints the application's safe internal category, such as `openai_timeout`, while the normal shopper-facing endpoint remains a generic HTTP 500. It never prints shopper/model prose, constraint values, raw context, keys, developer instructions, request/response bodies, reasoning, or raw provider errors.
+This command may incur OpenAI API charges. It is not a pytest test or CI requirement. It passes only when the provider accepts the exact strict Phase 7 format and bounded message context, completes its same-session constraint scenario, freshly grounds a recommendation and `WELCOME10`, and returns response/trace promotion and deterministic primary-card pricing that agree. On success it prints only safe field names, counts, canonical accepted IDs/code, validity/reason, pricing linkage checks, model/prompt version, turn indices, token totals, and latency. On a classified failure it prints the application's safe internal category, such as `openai_timeout`, while the normal shopper-facing endpoint remains a generic HTTP 500. It never prints shopper/model prose, constraint values, raw context, arithmetic inputs, keys, developer instructions, request/response bodies, reasoning, or raw provider errors.

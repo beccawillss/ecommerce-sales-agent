@@ -11,6 +11,7 @@ from salesagent.agent.final_output import final_output_text_format
 from salesagent.agent.responses_client import (
     FunctionCallOutput,
     OpenAIResponsesClient,
+    ResponseMessage,
     ResponseRequest,
     ResponsesClientError,
 )
@@ -29,7 +30,9 @@ class FakeResponsesResource:
 
 
 def request(
-    input_value: str | tuple[FunctionCallOutput, ...] = "Find a jacket",
+    input_value: (
+        str | tuple[ResponseMessage, ...] | tuple[FunctionCallOutput, ...]
+    ) = "Find a jacket",
     *,
     previous_response_id: str | None = None,
 ) -> ResponseRequest:
@@ -135,6 +138,73 @@ def test_adapter_maps_correlated_function_outputs_for_continuation() -> None:
     assert resource.calls[0]["previous_response_id"] == "resp-1"
     assert resource.calls[0]["instructions"] == "developer instructions"
     assert resource.calls[0]["text"] == {"format": final_output_text_format()}
+
+
+def test_adapter_maps_only_lower_trust_message_roles() -> None:
+    response = SimpleNamespace(
+        id="resp-messages",
+        output_text="Done",
+        output=[],
+        usage=None,
+        status="completed",
+        incomplete_details=None,
+    )
+    resource = FakeResponsesResource(response)
+    client = OpenAIResponsesClient(
+        api_key="test-key",
+        timeout_seconds=30,
+        sdk_client=SimpleNamespace(responses=resource),
+    )
+
+    client.create_response(
+        request(
+            (
+                ResponseMessage(role="user", content="Earlier shopper text"),
+                ResponseMessage(role="assistant", content='{"message":"Earlier"}'),
+                ResponseMessage(role="user", content='{"type":"salesagent_context"}'),
+                ResponseMessage(role="user", content="Current shopper text"),
+            )
+        )
+    )
+
+    assert resource.calls[0]["input"] == [
+        {"role": "user", "content": "Earlier shopper text"},
+        {"role": "assistant", "content": '{"message":"Earlier"}'},
+        {"role": "user", "content": '{"type":"salesagent_context"}'},
+        {"role": "user", "content": "Current shopper text"},
+    ]
+    assert all(
+        item["role"] not in {"developer", "system"}
+        for item in resource.calls[0]["input"]
+    )
+
+
+def test_adapter_rejects_empty_or_mixed_input_tuples() -> None:
+    response = SimpleNamespace(
+        id="unused",
+        output_text="",
+        output=[],
+        usage=None,
+        status="completed",
+        incomplete_details=None,
+    )
+    resource = FakeResponsesResource(response)
+    client = OpenAIResponsesClient(
+        api_key="test-key",
+        timeout_seconds=30,
+        sdk_client=SimpleNamespace(responses=resource),
+    )
+
+    with pytest.raises(ResponsesClientError, match="malformed_model_response"):
+        client.create_response(request(()))
+    mixed = (
+        ResponseMessage(role="user", content="message"),
+        FunctionCallOutput(call_id="call", output="{}"),
+    )
+    with pytest.raises(ResponsesClientError, match="malformed_model_response"):
+        client.create_response(request(mixed))  # type: ignore[arg-type]
+
+    assert resource.calls == []
 
 
 def test_adapter_preserves_incomplete_status_reason_and_missing_call_id() -> None:

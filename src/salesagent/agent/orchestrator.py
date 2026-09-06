@@ -7,10 +7,15 @@ from typing import Literal, NoReturn, cast
 
 from pydantic import ValidationError
 
-from salesagent.agent.final_output import AgentFinalOutput, final_output_text_format
+from salesagent.agent.final_output import (
+    AgentFinalOutput,
+    ConstraintUpdates,
+    final_output_text_format,
+)
 from salesagent.agent.instructions import DEVELOPER_INSTRUCTIONS, PROMPT_VERSION
 from salesagent.agent.responses_client import (
     FunctionCallOutput,
+    ResponseMessage,
     ResponseRequest,
     ResponsesClient,
     ResponsesClientError,
@@ -27,6 +32,7 @@ from salesagent.agent.tools.models import (
     ToolExecutionResult,
 )
 from salesagent.config import ReasoningEffort
+from salesagent.domain.conversation import SessionState
 
 OrchestrationErrorCode = Literal[
     "missing_openai_configuration",
@@ -52,6 +58,7 @@ class OrchestrationResult:
     final_text: str
     nominated_product_ids: tuple[str, ...]
     grounded_product_ids: frozenset[str]
+    constraint_updates: ConstraintUpdates
     model: str
     prompt_version: str
     usage: ResponseUsage
@@ -128,9 +135,14 @@ class AgentOrchestrator:
         """Return the public prompt version without exposing its content."""
         return PROMPT_VERSION
 
-    def run(self, user_message: str) -> OrchestrationResult:
+    def run(
+        self,
+        user_message: str,
+        context: SessionState | None = None,
+    ) -> OrchestrationResult:
         """Run a bounded direct/tool Responses chain or fail safely."""
-        response_input: str | tuple[FunctionCallOutput, ...] = user_message
+        response_input: tuple[ResponseMessage, ...] | tuple[FunctionCallOutput, ...]
+        response_input = _initial_messages(context or SessionState(), user_message)
         previous_response_id: str | None = None
         usage = ResponseUsage()
         total_function_calls = 0
@@ -194,6 +206,7 @@ class AgentOrchestrator:
                     final_text=final_output.message,
                     nominated_product_ids=final_output.nominated_product_ids,
                     grounded_product_ids=frozenset(grounded_product_ids.values()),
+                    constraint_updates=final_output.constraint_updates,
                     model=self._model,
                     prompt_version=PROMPT_VERSION,
                     usage=usage,
@@ -369,3 +382,57 @@ def _add_usage(left: ResponseUsage, right: ResponseUsage) -> ResponseUsage:
         output_tokens=left.output_tokens + right.output_tokens,
         total_tokens=left.total_tokens + right.total_tokens,
     )
+
+
+def _initial_messages(
+    context: SessionState,
+    user_message: str,
+) -> tuple[ResponseMessage, ...]:
+    """Build bounded role-correct history, state data, and current shopper input."""
+    messages: list[ResponseMessage] = []
+    for turn in context.history:
+        messages.append(ResponseMessage(role="user", content=turn.user_message))
+        messages.append(
+            ResponseMessage(
+                role="assistant",
+                content=json.dumps(
+                    {
+                        "message": turn.assistant_message,
+                        "recommended_product_ids": list(turn.recommended_product_ids),
+                    },
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+            )
+        )
+    constraints = context.resolved_constraints
+    state_data: dict[str, object] = {
+        "category": constraints.category,
+        "activity": constraints.activity,
+        "weather": list(constraints.weather),
+        "features": list(constraints.features),
+        "maximum_price": (
+            format(constraints.maximum_price, "f")
+            if constraints.maximum_price is not None
+            else None
+        ),
+        "colour": constraints.colour,
+        "size": constraints.size,
+        "season": constraints.season,
+        "priority": constraints.priority,
+    }
+    messages.append(
+        ResponseMessage(
+            role="user",
+            content=json.dumps(
+                {
+                    "type": "salesagent_context",
+                    "resolved_constraints": state_data,
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ),
+        )
+    )
+    messages.append(ResponseMessage(role="user", content=user_message))
+    return tuple(messages)

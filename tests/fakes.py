@@ -2,7 +2,7 @@
 
 from collections.abc import Iterable
 
-from salesagent.agent.final_output import AgentFinalOutput
+from salesagent.agent.final_output import AgentFinalOutput, ConstraintUpdates
 from salesagent.agent.responses_client import (
     ModelResponse,
     ResponseRequest,
@@ -11,11 +11,16 @@ from salesagent.agent.responses_client import (
 )
 
 
-def final_output_json(message: str, nominated_product_ids: Iterable[str] = ()) -> str:
+def final_output_json(
+    message: str,
+    nominated_product_ids: Iterable[str] = (),
+    constraint_updates: ConstraintUpdates | None = None,
+) -> str:
     """Build valid strict final output without teaching the fake to parse it."""
     return AgentFinalOutput(
         message=message,
         nominated_product_ids=tuple(nominated_product_ids),
+        constraint_updates=constraint_updates or ConstraintUpdates.retain_all(),
     ).model_dump_json()
 
 

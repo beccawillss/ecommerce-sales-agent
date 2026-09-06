@@ -70,6 +70,18 @@ def test_search_schema_declares_all_supported_phase_one_filters() -> None:
     }
 
 
+def test_search_description_explains_exact_catalogue_filter_boundary() -> None:
+    definition = next(
+        item for item in tool_definitions() if item["name"] == "search_products"
+    )
+    description = definition["description"]
+
+    assert isinstance(description, str)
+    assert "exact case-insensitive catalogue labels" in description
+    assert "Omit an uncertain broader term" in description
+    assert "inspect the returned product and variant facts" in description
+
+
 def test_search_maximum_price_has_openai_compatible_nullable_string_schema() -> None:
     definition = next(
         item for item in tool_definitions() if item["name"] == "search_products"

@@ -14,9 +14,11 @@ from salesagent.api.routes.traces import create_trace_router
 from salesagent.config import Settings
 from salesagent.repositories.products import ProductRepository
 from salesagent.repositories.promotions import PromotionRepository
+from salesagent.repositories.sessions import InMemorySessionRepository
 from salesagent.repositories.traces import InMemoryTraceRepository
 from salesagent.services.chat import ChatService
 from salesagent.services.commerce import CommerceService
+from salesagent.services.constraints import ConstraintStateMerger
 from salesagent.services.recommendations import RecommendationHydrator
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
@@ -41,6 +43,7 @@ def create_app(
     """Assemble an application with isolated state and injectable model I/O."""
     settings = settings or Settings.from_environment()
     trace_repository = InMemoryTraceRepository()
+    session_repository = InMemorySessionRepository()
     commerce_service = CommerceService(
         products=ProductRepository(PROJECT_ROOT / "data" / "products.json"),
         promotions=PromotionRepository(PROJECT_ROOT / "data" / "discounts.json"),
@@ -66,6 +69,8 @@ def create_app(
         trace_repository,
         orchestrator,
         RecommendationHydrator(commerce_service),
+        session_repository,
+        ConstraintStateMerger(),
     )
 
     application = FastAPI(title="Sales Agent", version="1.0.0")
@@ -73,6 +78,7 @@ def create_app(
     # widening the shopper-facing HTTP error contract.
     application.state.chat_service = chat_service
     application.state.trace_repository = trace_repository
+    application.state.session_repository = session_repository
     application.add_api_route(
         "/health",
         health,

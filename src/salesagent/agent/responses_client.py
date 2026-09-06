@@ -28,7 +28,15 @@ class FunctionCallOutput:
     output: str
 
 
-ResponseInput = str | tuple[FunctionCallOutput, ...]
+@dataclass(frozen=True, slots=True)
+class ResponseMessage:
+    """Lower-trust historical or application-context message."""
+
+    role: Literal["user", "assistant"]
+    content: str
+
+
+ResponseInput = str | tuple[ResponseMessage, ...] | tuple[FunctionCallOutput, ...]
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,15 +123,26 @@ class OpenAIResponsesClient:
         response_input: Any
         if isinstance(request.input, str):
             response_input = request.input
-        else:
+        elif request.input and all(
+            isinstance(item, ResponseMessage) for item in request.input
+        ):
+            response_input = [
+                {"role": item.role, "content": item.content}
+                for item in cast(tuple[ResponseMessage, ...], request.input)
+            ]
+        elif request.input and all(
+            isinstance(item, FunctionCallOutput) for item in request.input
+        ):
             response_input = [
                 {
                     "type": "function_call_output",
                     "call_id": item.call_id,
                     "output": item.output,
                 }
-                for item in request.input
+                for item in cast(tuple[FunctionCallOutput, ...], request.input)
             ]
+        else:
+            raise ResponsesClientError("malformed_model_response")
 
         try:
             response = client.responses.create(

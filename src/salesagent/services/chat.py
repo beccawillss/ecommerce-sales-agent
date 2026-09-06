@@ -1,7 +1,6 @@
 """Shopper-turn application service and trace persistence boundary."""
 
 from datetime import UTC, datetime
-from threading import Lock
 from time import perf_counter_ns
 from uuid import uuid4
 
@@ -16,6 +15,7 @@ from salesagent.agent.responses_client import ResponseUsage
 from salesagent.api.models import (
     ChatRequest,
     ChatResponse,
+    ConstraintChange,
     ProductRecommendation,
     RecommendationValidation,
     ResolvedConstraints,
@@ -24,7 +24,17 @@ from salesagent.api.models import (
     TraceError,
     TraceResponse,
 )
+from salesagent.domain.conversation import (
+    ConversationTurn,
+    ResolvedConstraintState,
+    SessionState,
+)
+from salesagent.repositories.sessions import InMemorySessionRepository
 from salesagent.repositories.traces import InMemoryTraceRepository
+from salesagent.services.constraints import (
+    ConstraintMergeResult,
+    ConstraintStateMerger,
+)
 from salesagent.services.recommendations import (
     HydratedRecommendation,
     RecommendationHydrationResult,
@@ -68,73 +78,93 @@ class ChatService:
         trace_repository: InMemoryTraceRepository,
         orchestrator: AgentOrchestrator,
         recommendation_hydrator: RecommendationHydrator,
+        session_repository: InMemorySessionRepository | None = None,
+        constraint_merger: ConstraintStateMerger | None = None,
     ) -> None:
         self._trace_repository = trace_repository
         self._orchestrator = orchestrator
         self._recommendation_hydrator = recommendation_hydrator
-        self._turn_indices: dict[str, int] = {}
-        self._turn_lock = Lock()
+        self._session_repository = session_repository or InMemorySessionRepository()
+        self._constraint_merger = constraint_merger or ConstraintStateMerger()
 
     def chat(self, request: ChatRequest) -> ChatResponse:
         """Run one stateless model turn and persist its safe trace."""
         started_at = perf_counter_ns()
         session_id = request.session_id or str(uuid4())
         trace_id = str(uuid4())
-        turn_index = self._next_turn_index(session_id)
+        with self._session_repository.lease(session_id) as lease:
+            snapshot = lease.state
+            try:
+                result = self._orchestrator.run(request.message, snapshot)
+            except AgentOrchestrationError as error:
+                terminal_error = TraceErrorEvidence(
+                    code=error.code,
+                    message=_TERMINAL_ERROR_MESSAGES[error.code],
+                    tool_call_id=error.tool_call_id,
+                )
+                trace = self._build_trace(
+                    trace_id=trace_id,
+                    session_id=session_id,
+                    turn_index=lease.turn_index,
+                    user_message=request.message,
+                    model=self._orchestrator.model,
+                    prompt_version=self._orchestrator.prompt_version,
+                    usage=error.usage,
+                    tool_evidence=error.tool_calls,
+                    errors=(*error.errors, terminal_error),
+                    started_at=started_at,
+                    resolved_constraints=snapshot.resolved_constraints,
+                )
+                self._trace_repository.store(trace)
+                raise ChatServiceError(trace_id=trace_id, code=error.code) from error
 
-        try:
-            result = self._orchestrator.run(request.message)
-        except AgentOrchestrationError as error:
-            terminal_error = TraceErrorEvidence(
-                code=error.code,
-                message=_TERMINAL_ERROR_MESSAGES[error.code],
-                tool_call_id=error.tool_call_id,
+            merged = self._constraint_merger.merge(
+                snapshot.resolved_constraints,
+                result.constraint_updates,
+            )
+            hydration = self._recommendation_hydrator.hydrate(
+                result.nominated_product_ids,
+                result.grounded_product_ids,
+            )
+            recommendations = [
+                self._map_recommendation(item) for item in hydration.recommendations
+            ]
+            response = ChatResponse(
+                session_id=session_id,
+                trace_id=trace_id,
+                message=result.final_text,
+                recommendations=recommendations,
+                promotion=None,
+                pricing=None,
             )
             trace = self._build_trace(
                 trace_id=trace_id,
                 session_id=session_id,
-                turn_index=turn_index,
+                turn_index=lease.turn_index,
                 user_message=request.message,
-                model=self._orchestrator.model,
-                prompt_version=self._orchestrator.prompt_version,
-                usage=error.usage,
-                tool_evidence=error.tool_calls,
-                errors=(*error.errors, terminal_error),
+                model=result.model,
+                prompt_version=result.prompt_version,
+                usage=result.usage,
+                tool_evidence=result.tool_calls,
+                errors=result.errors,
                 started_at=started_at,
+                hydration=hydration,
+                resolved_constraints=merged.state,
+                constraint_changes=self._map_changes(snapshot, merged),
+            )
+            committed_state = SessionState(
+                resolved_constraints=merged.state,
+                history=snapshot.history,
+            ).append_turn(
+                ConversationTurn(
+                    user_message=request.message,
+                    assistant_message=result.final_text,
+                    recommended_product_ids=hydration.accepted_product_ids,
+                )
             )
             self._trace_repository.store(trace)
-            raise ChatServiceError(trace_id=trace_id, code=error.code) from error
-
-        hydration = self._recommendation_hydrator.hydrate(
-            result.nominated_product_ids,
-            result.grounded_product_ids,
-        )
-        recommendations = [
-            self._map_recommendation(item) for item in hydration.recommendations
-        ]
-        response = ChatResponse(
-            session_id=session_id,
-            trace_id=trace_id,
-            message=result.final_text,
-            recommendations=recommendations,
-            promotion=None,
-            pricing=None,
-        )
-        trace = self._build_trace(
-            trace_id=trace_id,
-            session_id=session_id,
-            turn_index=turn_index,
-            user_message=request.message,
-            model=result.model,
-            prompt_version=result.prompt_version,
-            usage=result.usage,
-            tool_evidence=result.tool_calls,
-            errors=result.errors,
-            started_at=started_at,
-            hydration=hydration,
-        )
-        self._trace_repository.store(trace)
-        return response
+            lease.commit(committed_state)
+            return response
 
     @staticmethod
     def _build_trace(
@@ -150,6 +180,8 @@ class ChatService:
         errors: tuple[TraceErrorEvidence, ...],
         started_at: int,
         hydration: RecommendationHydrationResult | None = None,
+        resolved_constraints: ResolvedConstraintState | None = None,
+        constraint_changes: list[ConstraintChange] | None = None,
     ) -> TraceResponse:
         recommendation_validation = (
             RecommendationValidation(
@@ -175,8 +207,10 @@ class ChatService:
             user_message=user_message,
             model=model,
             prompt_version=prompt_version,
-            resolved_constraints=ResolvedConstraints(),
-            constraint_changes=[],
+            resolved_constraints=ChatService._map_constraints(
+                resolved_constraints or ResolvedConstraintState()
+            ),
+            constraint_changes=constraint_changes or [],
             tool_calls=[
                 ToolCallTrace(
                     sequence=sequence,
@@ -227,8 +261,34 @@ class ChatService:
             matched_variant=None,
         )
 
-    def _next_turn_index(self, session_id: str) -> int:
-        with self._turn_lock:
-            turn_index = self._turn_indices.get(session_id, 0) + 1
-            self._turn_indices[session_id] = turn_index
-            return turn_index
+    @staticmethod
+    def _map_constraints(state: ResolvedConstraintState) -> ResolvedConstraints:
+        return ResolvedConstraints(
+            category=state.category,
+            activity=state.activity,
+            weather=list(state.weather),
+            features=list(state.features),
+            maximum_price=state.maximum_price,
+            colour=state.colour,
+            size=state.size,
+            season=state.season,
+            priority=state.priority,
+        )
+
+    @staticmethod
+    def _map_changes(
+        snapshot: SessionState,
+        merged: ConstraintMergeResult,
+    ) -> list[ConstraintChange]:
+        previous = ChatService._map_constraints(
+            snapshot.resolved_constraints
+        ).model_dump(mode="json")
+        current = ChatService._map_constraints(merged.state).model_dump(mode="json")
+        return [
+            ConstraintChange(
+                field=change.field,
+                previous=previous[change.field],
+                current=current[change.field],
+            )
+            for change in merged.changes
+        ]

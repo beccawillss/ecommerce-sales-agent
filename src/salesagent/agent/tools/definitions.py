@@ -40,6 +40,9 @@ TOOL_REGISTRY: tuple[ToolSpec, ...] = (
         name="search_products",
         description=(
             "Read-only catalogue search using explicit shopper constraints. "
+            "Text filters match exact case-insensitive catalogue labels; use one "
+            "only when its authoritative label is known. Omit an uncertain broader "
+            "term and inspect the returned product and variant facts instead. "
             "Returns all matching catalogue candidates in deterministic price then "
             "product-ID order, including authoritative product IDs and product facts. "
             "Use it to discover candidates; it does not rank or choose recommendations."

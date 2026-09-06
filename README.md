@@ -1,20 +1,22 @@
 # Sales Agent
 
-Sales Agent is an AI-powered sales concierge for a fictional outdoor retailer. Phase 5 uses the OpenAI Responses API to produce a strict final object containing shopper-facing text and up to three nominated catalogue product IDs after calling four validated, read-only commerce tools through a bounded application-owned orchestration loop.
+Sales Agent is an AI-powered sales concierge for a fictional outdoor retailer. Phase 6 uses the OpenAI Responses API to produce a strict final object containing shopper-facing text, up to three nominated catalogue product IDs, and explicit shopper-constraint updates after calling four validated, read-only commerce tools through a bounded application-owned orchestration loop.
 
-The model can nominate IDs only. Application code requires those IDs to have appeared in successful authoritative commerce-tool results during the current turn, re-fetches every first-seen nomination through `CommerceService`, and hydrates product cards only from current deterministic catalogue data. Pricing application and cross-turn conversation memory belong to later phases.
+The model can nominate IDs and identify explicit constraint changes only. Application code owns deterministic retain/set/clear merging and requires nominated IDs to have appeared in successful authoritative commerce-tool results during the current turn. It re-fetches accepted nominations through `CommerceService` and hydrates product cards only from current deterministic catalogue data. Pricing application remains out of scope.
 
 ## Current behavior
 
 - `GET /health` reports application health without requiring OpenAI configuration.
-- `POST /api/v1/chat` starts a fresh Responses chain for the shopper turn. The model can call `search_products`, `get_product`, `check_inventory`, and `validate_discount`, then return strict shopper prose plus zero to three product-ID nominations.
+- `POST /api/v1/chat` starts a fresh Responses chain for the shopper turn. The backend supplies the session's normalized constraints and up to six successful historical turn pairs, then the model can call `search_products`, `get_product`, `check_inventory`, and `validate_discount` before returning strict prose, nominations, and constraint updates.
 - `GET /api/v1/traces/{trace_id}` returns the in-memory turn trace when evaluation traces are enabled.
 
 Commerce remains authoritative. The orchestration layer never reads catalogue or promotion fixtures directly: every model-selected tool name and argument object passes through the existing allowlisted, Pydantic-validated dispatcher. Tool results preserve exact decimal strings. Unknown, duplicate, and current-turn-ungrounded nominations are omitted and recorded as bounded validation evidence in the trace.
 
 Every emitted card's canonical ID, name, Decimal price, currency, URL, and availability comes from a fresh commerce lookup. Product availability is `in_stock` when every variant has stock, `out_of_stock` when every variant is empty, and `partial` when stocked and empty variants are mixed. Phase 5 does not select an exact variant, so `matched_variant` remains `null`; `promotion` and `pricing` also remain `null`.
 
-One shopper turn is limited to six Responses calls, eight custom function attempts, and two occurrences of the same canonical tool-and-arguments signature. `previous_response_id` is used only inside that turn; a new `POST /api/v1/chat` starts with no OpenAI conversation state from earlier session turns.
+One shopper turn is limited to six Responses calls, eight custom function attempts, and two occurrences of the same canonical tool-and-arguments signature. `previous_response_id` is used only inside that turn; a new `POST /api/v1/chat` starts with no OpenAI conversation state from earlier session turns. The backend instead owns complete normalized constraints and retains only the newest six successful user/assistant pairs plus IDs of cards actually returned. Failed turns consume a trace turn index but do not update constraints or history.
+
+Session state is in memory and isolated to one application process. It is lost on restart or app recreation and is not shared across workers; production multi-worker deployment would require session affinity or separately designed shared persistence. The backend does not retain raw provider responses, reasoning, tool payloads, credentials, or cross-turn response IDs in session state.
 
 ## Prerequisites
 
@@ -74,4 +76,4 @@ After offline checks pass, a developer may explicitly run one grounded recommend
 OPENAI_API_KEY=... uv run python scripts/smoke_openai_agent.py
 ```
 
-This command may incur OpenAI API charges. It is not a pytest test or CI requirement. It passes only when the provider accepts the exact strict Phase 5 format and the assembled application emits at least one grounded authoritative card whose IDs match the trace. On success it prints only safe counts, canonical accepted IDs, model, token, and latency fields. On a classified failure it prints the application's safe internal category, such as `openai_timeout`, while the normal shopper-facing endpoint remains a generic HTTP 500. It never prints the shopper prompt, model prose, key, developer instructions, request/response bodies, reasoning, or raw provider errors.
+This command may incur OpenAI API charges. It is not a pytest test or CI requirement. It passes only when the provider accepts the exact strict Phase 6 format and bounded message context, completes its same-session constraint scenario, and emits a currently grounded authoritative card whose IDs match the trace. On success it prints only safe field names, counts, canonical accepted IDs, model/prompt version, turn indices, token totals, and latency. On a classified failure it prints the application's safe internal category, such as `openai_timeout`, while the normal shopper-facing endpoint remains a generic HTTP 500. It never prints shopper/model prose, constraint values, raw context, keys, developer instructions, request/response bodies, reasoning, or raw provider errors.

@@ -64,8 +64,8 @@ Repository sources, in precedence order for this work:
 - `docs/plans/openai-agent-orchestration.md` records the completed Phase 4 loop,
   including its response/call bounds, safe failures, usage/tracing semantics,
   and deliberate use of `previous_response_id` only within one shopper turn.
-- Phase 5 is represented in the inspected repository by local branch
-  `feat/recommendation-hydration`, commits `90f245e` and `4e7aa25`. Its
+- Phase 5 is present in the active branch history at commits `90f245e` and
+  `4e7aa25`. Its
   `docs/plans/recommendation-hydration.md` and implementation establish the
   strict `AgentFinalOutput`, current-turn grounded product IDs,
   `RecommendationHydrator`, authoritative card assembly, and accepted-ID trace
@@ -85,25 +85,18 @@ Repository sources, in precedence order for this work:
 - `src/salesagent/main.py` is the application composition root. It creates
   process-local repositories and shares one `CommerceService` between the tool
   dispatcher and, after Phase 5, recommendation hydration.
-- The complete tests under `tests/`, including the Phase 5 versions inspected
-  from `feat/recommendation-hydration`, define the existing session-ID,
+- The complete tests under `tests/`, including the merged Phase 5 coverage,
+  define the existing session-ID,
   turn-index, trace gating, orchestration, strict-output, recommendation, and
   safety behavior that Phase 6 must retain.
 
-Two required planning inputs are not present on the active checkout:
+One named planning input is not present on the active checkout:
 
 - `docs/product-spec.md` is named as authoritative by `AGENTS.md` but is absent
   from both the active branch and the inspected Phase 5 tree. No unavailable
   product-spec behavior is assumed. If the file appears before implementation,
   read it first and reconcile any conflict in this plan's Discoveries and
-  Decision log before changing source code.
-- The active `feat/conversation-state` branch currently points to Phase 4 commit
-  `e7671d7`. Consequently `docs/plans/recommendation-hydration.md`,
-  `src/salesagent/agent/final_output.py`, `src/salesagent/services/recommendations.py`,
-  and their tests are not in the working tree even though the Phase 6 brief calls
-  them current Phase 5 inputs. Phase 6 implementation must first integrate or
-  rebase onto `feat/recommendation-hydration` commit `4e7aa25`; it must not
-  recreate or bypass Phase 5 from the older working tree.
+  Decision log. It did not appear during Phase 6 implementation.
 
 Current official OpenAI documentation also constrains the design:
 
@@ -215,10 +208,11 @@ Phase 6 does not add:
 
 ## Current state
 
-The active branch is a Phase 4 checkout. `ChatService` preserves or generates a
+At Phase 6 implementation start, the rebased active branch includes the complete
+Phase 5 implementation at `4e7aa25`. `ChatService` preserves or generates a
 session ID and increments a `_turn_indices` dictionary under one lock before it
-calls the orchestrator. This means failed turns consume an index and receive a
-failure trace. The service does not retain constraints or conversation text;
+calls the orchestrator. Failed turns consume an index and receive a failure
+trace, but the service does not yet retain constraints or conversation text;
 every call to `AgentOrchestrator.run` receives only the current `message`.
 
 `AgentOrchestrator` starts every shopper request with
@@ -233,7 +227,7 @@ unique call IDs, schema-validated dispatch, and safe provider failures.
 maps the function outputs to SDK input items. It does not yet have an
 application-owned message item for backend transcript replay.
 
-Phase 5, on its local feature branch, changes the final no-tool output to a
+The merged Phase 5 baseline changes the final no-tool output to a
 strict JSON object with `message` and `nominated_product_ids`, supplies that
 schema through Responses `text.format`, and derives `grounded_product_ids` only
 from typed successful commerce evidence in the current `run` call. Its
@@ -1122,24 +1116,101 @@ CI. If credentials are unavailable, record that it was not run.
   context from a dynamic developer message to a distinguished user-role data
   envelope; updated design, milestone, tests, security checks, and decision
   rationale only, with no implementation work.
-- [ ] Milestone 1 — Establish the Phase 5 baseline and state models.
-- [ ] Milestone 2 — Add the strict constraint-update contract.
-- [ ] Milestone 3 — Implement deterministic normalization and merging.
-- [ ] Milestone 4 — Add the in-memory session repository and locking.
-- [ ] Milestone 5 — Pass bounded backend context into Responses.
-- [ ] Milestone 6 — Integrate transactional state into ChatService.
-- [ ] Milestone 7 — Preserve cross-turn recommendation grounding.
-- [ ] Milestone 8 — Complete multi-turn API, trace, safety, and documentation
-  coverage.
-- [ ] Milestone 9 — Full regression and optional live multi-turn smoke.
+- [x] 2026-09-05: Milestone 1 — Verified commit `4e7aa25` is the Phase 6
+  baseline, confirmed all 165 offline Phase 5 tests pass, and added immutable
+  contract-aligned constraint, turn, and six-turn-bounded session models.
+- [x] 2026-09-05: Milestone 2 — Extended the Phase 5 final output with a
+  required fixed nine-field patch, strict text/list/money update objects,
+  explicit retain-all test fixtures, Decimal-string validation, and recursive
+  strict-schema coverage; all 25 focused tests pass.
+- [x] 2026-09-05: Milestone 3 — Added the all-or-nothing deterministic merger
+  with whitespace/case normalization, stable set-like list handling,
+  Decimal-safe budget comparison, display-preserving no-ops, and fixed-order
+  immutable change evidence; focused merge tests pass.
+- [x] 2026-09-05: Milestone 4 — Added context-managed one-shot session leases,
+  per-session locks, independently reserved attempt indices, bounded immutable
+  commits, and event-controlled concurrency coverage proving same-session
+  serialization without cross-session blocking.
+- [x] 2026-09-05: Milestone 5 — Added lower-trust `user`/`assistant` message
+  inputs, deterministic history/state/current-message assembly, strict rejection
+  of mixed inputs, Phase 6 instructions, and typed patch propagation while
+  retaining turn-local continuation IDs and grounding; 44 focused tests pass.
+- [x] 2026-09-05: Milestone 6 — Injected session/merge ownership into the app,
+  made ChatService trace-then-commit successful turns, preserved unchanged
+  failure snapshots and consumed indices, stored only successful bounded
+  history, and proved serialized concurrent merges; service/API tests pass.
+- [x] 2026-09-05: Milestone 7 — Added a three-turn follow-up regression proving
+  prior accepted IDs are reference context only: an ungrounded repeat nomination
+  emits no card, while a fresh current-turn lookup permits re-hydration.
+- [x] 2026-09-05: Milestone 8 — Added HTTP-level retain/add/replace/clear,
+  cross-session isolation, six-turn replay, strict unknown-field rollback, and
+  unchanged-contract coverage; updated README with backend ownership,
+  current-turn grounding, data minimization, and restart/multi-worker limits.
+- [x] 2026-09-05: Milestone 9 — Updated the safe manual smoke to a three-turn
+  same-session state/grounding scenario; all 206 offline tests and every
+  repository validation pass. `OPENAI_API_KEY` was unavailable, so the paid
+  live smoke was not run and provider acceptance is not claimed.
+- [x] 2026-09-06: A developer live run reached the provider and completed all
+  three chat calls but failed the smoke's compound state/evidence predicate.
+  The original one-line failure discarded the process-local traces without
+  identifying its failed clause, so the smoke now reports named failed checks
+  and bounded safe per-turn trace summaries without weakening acceptance.
+- [x] 2026-09-06: The diagnostic live rerun isolated the sole failed check as
+  `turn_3_recommendations`: all state/trace/tool-presence checks passed, the
+  final turn called `search_products`, and both accepted recommendation IDs and
+  validation errors were empty. Added safe per-turn grounded product IDs to the
+  diagnostic so the next run can distinguish an empty search result from a
+  model decision not to nominate an available result; no functional behavior or
+  assertion changed.
+- [x] 2026-09-06: The grounded-ID rerun showed no grounded products on turns 2
+  or 3. An offline deterministic reproduction with the smoke's resolved
+  constraints returned no result for the broad colour term `blue`, but returned
+  `JKT-003` for the exact catalogue variant `Ocean Blue` or when colour was
+  omitted. This identifies a prompt/tool-use mismatch around exact catalogue
+  labels, not a state, merge, grounding, hydration, or trace defect. No
+  functional fix was made during diagnosis.
+- [x] 2026-09-06: Applied the approved minimal prompt/tool-use correction as
+  `phase6-v2`: exact text filters now require confidence in the authoritative
+  label, uncertain broader wording is omitted while authoritative results are
+  inspected, and historical accepted IDs may be freshly re-grounded on a
+  follow-up but remain reference-only. The 77 focused offline tests pass; no
+  assertion, schema, state, commerce, grounding, or hydration behavior changed.
 
 ## Discoveries
 
-- The active `feat/conversation-state` branch and `origin/main` stop at Phase 4,
-  while complete Phase 5 work exists only on local
-  `feat/recommendation-hydration`. This matters because the requested “smallest
-  extension” to `AgentFinalOutput` and recommendation-grounding regression tests
-  are impossible against the active tree until Phase 5 is integrated.
+- The initial live-smoke acceptance failure cannot be classified after process
+  exit because eleven checks shared one boolean and the in-memory traces were
+  not printed or persisted outside that process. This matters because any
+  functional change before a diagnostic rerun would be speculative; named safe
+  diagnostics are now emitted for the next run.
+- The diagnostic rerun proved that only the final non-empty recommendation
+  check failed. Its empty accepted-ID list together with an empty recommendation
+  validation-error list means hydration did not reject an invalid or ungrounded
+  nomination; the model supplied no nomination. The existing summary did not
+  expose the final turn's grounding set, so it cannot yet prove whether
+  `search_products` returned no candidate or whether the model declined to
+  nominate a returned candidate. Safe grounded-ID reporting now preserves that
+  distinction without exposing arguments or raw tool data.
+- The subsequent grounded-ID rerun resolved that distinction: both post-colour
+  searches produced an empty grounding set. The authoritative catalogue has
+  `JKT-003`, a waterproof hiking jacket at GBP 110 with an in-stock `Ocean Blue`
+  variant, while deterministic colour filtering is exact and case-insensitive.
+  Replaying the otherwise matching final constraints with `blue` yields no
+  result; using `Ocean Blue` or omitting colour yields `JKT-003`. The bounded
+  context identifies that prior accepted ID, so a fresh current-turn lookup is
+  available without treating history as evidence. The narrow corrective surface
+  is prompt/tool-use guidance for broad shopper terms and fresh lookup of known
+  historical IDs, not relaxation of grounding or hydration.
+- The rebased branch now contains Phase 5 commit `4e7aa25` directly beneath the
+  two Phase 6 plan commits, and its full offline suite passes 165 tests. This
+  resolves the original baseline integration gate without a merge conflict or
+  any need to change the approved Phase 6 architecture.
+
+- The initial planning checkout stopped at Phase 4 while complete Phase 5 work
+  existed only on `feat/recommendation-hydration`; the later rebase placed
+  `4e7aa25` in the active history before implementation. This matters because
+  the Phase 6 extension and grounding regressions were built on the actual
+  merged Phase 5 boundary rather than recreated from an older tree.
 - `docs/product-spec.md` is absent from both inspected trees. This matters
   because the API contract and existing implementation are the only available
   sources for constraint types; any restored product specification must be
@@ -1276,9 +1347,21 @@ CI. If credentials are unavailable, record that it was not run.
   attempt uniquely ordered. **Consequence:** successful turn indices can contain
   gaps only when intervening failures occurred.
 - **Decision 17 — Baseline integration gate:** Implement Phase 6 only after
-  commit `4e7aa25` is in the target history. **Reason:** The active branch lacks
-  the authoritative Phase 5 code this feature must extend. **Consequence:** Any
-  merge/rebase discoveries are recorded here before Phase 6 source work begins.
+  commit `4e7aa25` is in the target history. **Reason:** The initial branch
+  lacked the authoritative Phase 5 code this feature must extend.
+  **Consequence:** The rebase satisfied the gate, its 165-test baseline passed,
+  and Phase 6 proceeded without architecture or contract changes.
+- **Decision 18 — Exact-filter prompt correction:** Bump to `phase6-v2` and
+  describe exact catalogue-label confidence in the `search_products` tool while
+  keeping the cross-tool historical-ID refresh rule in static developer
+  instructions. **Reason:** Live diagnostics proved that the broad shopper term
+  `blue` produced no current-turn grounding even though a qualifying product has
+  an `Ocean Blue` variant; the model needs accurate tool-use guidance, not fuzzy
+  commerce behavior. **Consequence:** Uncertain broad labels should be omitted
+  from exact search filters so authoritative returned variants can be inspected,
+  and a prior accepted ID may identify a fresh qualifying lookup but never
+  becomes grounding itself. Search, state, hydration, API, and smoke acceptance
+  semantics remain unchanged.
 
 ## Risks and follow-ups
 
@@ -1324,22 +1407,86 @@ CI. If credentials are unavailable, record that it was not run.
 - **Missing product spec:** A later restored specification may define different
   normalization, history, or constraint semantics. Reconcile it before coding
   rather than changing an authoritative file.
-- **Phase 5 branch divergence:** If Phase 5 is amended before integration, re-read
-  its final code/tests and update this plan; do not assume commit `4e7aa25` is
-  still the merge target.
+- **Phase 5 baseline:** The rebase integrated `4e7aa25` without conflict and the
+  implementation preserved its current-turn grounding and authoritative
+  hydration. Any future Phase 5 backport must retain those Phase 6 regressions.
 
 ## Outcome
 
-Planning completed on 2026-09-05. No Phase 6 source, test, contract, fixture,
-configuration, dependency, or runtime behavior has been implemented. This plan
-defines the intended state architecture, strict patch, normalization and merge
-rules, six-turn history, lower-trust user-role Responses context, transaction
-boundary, per-session locking, current-turn recommendation grounding, trace
-semantics, tests, and validation workflow. The pre-implementation architecture
-review keeps static developer instructions as the only developer-role content;
-shopper-derived resolved state is now a distinguished user-role data envelope.
+Phase 6 implementation completed on 2026-09-05 on the rebased Phase 5 baseline.
+The application now stores an immutable complete resolved-constraint snapshot,
+the newest six successful user/assistant pairs, accepted historical card IDs,
+and an independent attempted-turn counter for each process-local session. A
+context-managed per-session lease serializes a whole turn from snapshot through
+trace/store/commit; the short registry lock only creates per-session locks, so
+different sessions remain independent.
 
-Implementation remains gated on integrating the completed local Phase 5 branch
-and rechecking any restored `docs/product-spec.md`. Complete this section with
-shipped behavior, command results, live-smoke status, deviations, and remaining
-limitations only after all milestones are implemented.
+The strict model final output now includes all nine nullable constraint-update
+fields. Null retains, set adds or replaces the complete field, and clear resets
+it. Application code normalizes text, performs case-insensitive semantic
+comparison, canonicalizes list membership/order, parses finite nonnegative
+budgets directly as Decimal strings, preserves stored display values for no-ops,
+and emits only real changes in contract order. Successful traces contain the
+complete post-merge state; failure traces contain the unchanged pre-turn state
+and no constraint changes. Failed turns consume their reserved index but append
+no history and commit no constraint mutation.
+
+Every new Responses chain starts with at most six normal historical
+user/assistant pairs, then a JSON-escaped `user` message containing the complete
+normalized `salesagent_context`, then the current shopper text as the final
+`user` message. Static `DEVELOPER_INSTRUCTIONS` is still the only developer-role
+content. `previous_response_id` remains null on each new shopper turn and is
+used only for correlated function outputs within that turn. Session history
+stores no provider IDs, raw output, tool payloads, traces, reasoning, prompts,
+credentials, or rejected nominations.
+
+Phase 5 recommendation authority is unchanged. Historical accepted IDs are
+reference context only and never populate the current grounding set. A new card
+still requires successful current-turn commerce evidence, nomination validation,
+and a fresh authoritative `CommerceService` lookup. Promotion and pricing remain
+null and no Phase 7 behavior was added. The public YAML/API contract, catalogue,
+promotion data, dependencies, commerce services, tool schemas, dispatcher, and
+recommendation hydrator were not changed.
+
+Final validation passed from the repository root:
+
+- `uv sync` resolved 35 packages and checked 33 without dependency changes;
+- `uv run pytest` passed 207 offline tests;
+- `uv run ruff check .` passed;
+- `uv run ruff format --check .` reported all 57 files formatted;
+- `uv run mypy src` passed strictly across 31 source files;
+- `uv run python -c "from salesagent.main import app; print(app.title)"`
+  printed `Sales Agent`;
+- `git diff --check` passed.
+
+There were no material deviations from the approved architecture. The earlier
+baseline conflict was resolved by the requested rebase before implementation;
+the 165-test Phase 5 baseline passed before Phase 6 work. The optional smoke was
+updated and its four offline diagnostic tests pass. Developer diagnostic runs
+reached the provider and completed the three-turn path. Every state, merge,
+trace-ordering, and final-tool-presence check passed; only the required final
+recommendation was absent. The final trace had one successful
+`search_products` call, no grounded or accepted recommendation IDs, and no
+recommendation validation errors. Offline reproduction confirmed that the
+smoke's broad `blue` preference does not exactly match the catalogue's
+`Ocean Blue` variant, whereas the same final constraints with that exact label
+or without colour return `JKT-003`.
+
+The approved corrective change is shipped as `phase6-v2`. Static developer
+instructions now require confidence before using exact catalogue labels, direct
+broader or uncertain wording through known-safe searches followed by inspection
+of authoritative product/variant results, and permit historical accepted IDs to
+identify fresh current-turn lookups without treating them as evidence. The
+`search_products` description now accurately states its exact case-insensitive
+text-filter behavior. No deterministic search, fuzzy matching, smoke assertion,
+grounding, hydration, state, API, or commerce behavior changed. Per explicit
+instruction, the billable live smoke was not rerun automatically after this
+prompt correction, so live provider acceptance of `phase6-v2` remains pending a
+manual run.
+
+Remaining V1 limitations are intentional: state and locks reset on restart/app
+recreation, are not shared across workers, have no TTL/session-count eviction,
+and do not authenticate ownership of caller-supplied session IDs. The trace and
+session repositories are separately in-memory rather than a durable atomic
+transaction, and model intent classification still requires external quality
+evaluation even though merge and commerce authority are deterministic.

@@ -2,10 +2,17 @@
 
 import json
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+from threading import Event
 
 import pytest
 
+from salesagent.agent.final_output import (
+    ConstraintUpdates,
+    MoneyTextUpdate,
+    TextUpdate,
+)
 from salesagent.agent.instructions import DEVELOPER_INSTRUCTIONS
 from salesagent.agent.orchestrator import AgentOrchestrator
 from salesagent.agent.responses_client import (
@@ -20,6 +27,7 @@ from salesagent.agent.tools.models import ToolExecutionResult
 from salesagent.api.models import ChatRequest
 from salesagent.repositories.products import ProductRepository
 from salesagent.repositories.promotions import PromotionRepository
+from salesagent.repositories.sessions import InMemorySessionRepository
 from salesagent.repositories.traces import InMemoryTraceRepository
 from salesagent.services.chat import ChatService, ChatServiceError
 from salesagent.services.commerce import CommerceService
@@ -71,6 +79,40 @@ def service_for(
     return (
         ChatService(repository, orchestrator, RecommendationHydrator(commerce)),
         repository,
+    )
+
+
+def constraint_updates(**values: object) -> ConstraintUpdates:
+    payload = ConstraintUpdates.retain_all().model_dump()
+    payload.update(values)
+    return ConstraintUpdates.model_validate(payload)
+
+
+def stateful_service_for(
+    model_client: ScriptedResponsesClient,
+) -> tuple[ChatService, InMemoryTraceRepository, InMemorySessionRepository]:
+    commerce = CommerceService(
+        ProductRepository(ROOT / "data" / "products.json"),
+        PromotionRepository(ROOT / "data" / "discounts.json"),
+    )
+    traces = InMemoryTraceRepository()
+    sessions = InMemorySessionRepository()
+    orchestrator = AgentOrchestrator(
+        responses_client=model_client,
+        dispatcher=ToolDispatcher(commerce),
+        model="gpt-5.6-terra",
+        reasoning_effort="low",
+        max_output_tokens=2000,
+    )
+    return (
+        ChatService(
+            traces,
+            orchestrator,
+            RecommendationHydrator(commerce),
+            sessions,
+        ),
+        traces,
+        sessions,
     )
 
 
@@ -136,7 +178,7 @@ def test_chat_service_persists_ordered_authoritative_tool_trace() -> None:
     assert trace.session_id == "session-trace"
     assert trace.turn_index == 1
     assert trace.model == "gpt-5.6-terra"
-    assert trace.prompt_version == "phase5-v1"
+    assert trace.prompt_version == "phase6-v2"
     assert trace.token_usage.input_tokens == 18
     assert trace.token_usage.output_tokens == 8
     assert trace.token_usage.total_tokens == 26
@@ -199,7 +241,7 @@ def test_chat_service_persists_safe_failure_trace_before_raising() -> None:
     trace = repository.get(captured.value.trace_id)
     assert trace is not None
     assert trace.model == "gpt-5.6-terra"
-    assert trace.prompt_version == "phase5-v1"
+    assert trace.prompt_version == "phase6-v2"
     assert trace.tool_calls == []
     assert trace.token_usage.total_tokens == 0
     assert trace.errors[-1].code == "openai_unavailable"
@@ -343,3 +385,302 @@ def test_invalid_tool_evidence_persists_only_safe_terminal_trace() -> None:
         "tool_call_id": "call-invalid-evidence",
     }
     assert "raw secret" not in trace.model_dump_json()
+
+
+def test_successful_turns_commit_merged_state_changes_and_bounded_history() -> None:
+    model_client = ScriptedResponsesClient(
+        [
+            ModelResponse(
+                response_id="resp-state-1",
+                output_text=final_output_json(
+                    "I will use that budget.",
+                    constraint_updates=constraint_updates(
+                        activity=TextUpdate(operation="set", value=" Hiking "),
+                        maximum_price=MoneyTextUpdate(operation="set", value="160.00"),
+                    ),
+                ),
+                function_calls=(),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+            ModelResponse(
+                response_id="resp-state-2",
+                output_text=final_output_json(
+                    "I have updated the colour and budget.",
+                    constraint_updates=constraint_updates(
+                        maximum_price=MoneyTextUpdate(operation="set", value="120"),
+                        colour=TextUpdate(operation="set", value=" Ocean   Blue "),
+                    ),
+                ),
+                function_calls=(),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+        ]
+    )
+    service, traces, sessions = stateful_service_for(model_client)
+
+    first = service.chat(ChatRequest(session_id="state-session", message="Under £160"))
+    second = service.chat(
+        ChatRequest(session_id="state-session", message="Actually £120 in blue")
+    )
+    first_trace = traces.get(first.trace_id)
+    second_trace = traces.get(second.trace_id)
+    state = sessions.get_state("state-session")
+
+    assert first_trace is not None
+    assert first_trace.resolved_constraints.activity == "Hiking"
+    assert first_trace.resolved_constraints.maximum_price == 160
+    assert [change.field for change in first_trace.constraint_changes] == [
+        "activity",
+        "maximum_price",
+    ]
+    assert second_trace is not None
+    assert second_trace.turn_index == 2
+    assert second_trace.resolved_constraints.activity == "Hiking"
+    assert second_trace.resolved_constraints.maximum_price == 120
+    assert second_trace.resolved_constraints.colour == "Ocean Blue"
+    assert [change.field for change in second_trace.constraint_changes] == [
+        "maximum_price",
+        "colour",
+    ]
+    assert second_trace.constraint_changes[0].model_dump(mode="json") == {
+        "field": "maximum_price",
+        "previous": 160.0,
+        "current": 120.0,
+    }
+    assert state.resolved_constraints.activity == "Hiking"
+    assert state.resolved_constraints.maximum_price == 120
+    assert state.resolved_constraints.colour == "Ocean Blue"
+    assert [turn.user_message for turn in state.history] == [
+        "Under £160",
+        "Actually £120 in blue",
+    ]
+
+
+def test_failed_turn_preserves_state_and_history_but_consumes_turn_index() -> None:
+    model_client = ScriptedResponsesClient(
+        [
+            ModelResponse(
+                response_id="resp-success-1",
+                output_text=final_output_json(
+                    "Stored.",
+                    constraint_updates=constraint_updates(
+                        activity=TextUpdate(operation="set", value="Hiking")
+                    ),
+                ),
+                function_calls=(),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+            ResponsesClientError("openai_unavailable"),
+            ModelResponse(
+                response_id="resp-success-3",
+                output_text=final_output_json("Still hiking."),
+                function_calls=(),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+        ]
+    )
+    service, traces, sessions = stateful_service_for(model_client)
+    first = service.chat(ChatRequest(session_id="rollback", message="For hiking"))
+
+    with pytest.raises(ChatServiceError) as captured:
+        service.chat(ChatRequest(session_id="rollback", message="Failed request"))
+    failure_trace = traces.get(captured.value.trace_id)
+    after_failure = sessions.get_state("rollback")
+    third = service.chat(ChatRequest(session_id="rollback", message="Continue"))
+    third_trace = traces.get(third.trace_id)
+
+    assert traces.get(first.trace_id) is not None
+    assert failure_trace is not None
+    assert failure_trace.turn_index == 2
+    assert failure_trace.resolved_constraints.activity == "Hiking"
+    assert failure_trace.constraint_changes == []
+    assert [turn.user_message for turn in after_failure.history] == ["For hiking"]
+    assert third_trace is not None
+    assert third_trace.turn_index == 3
+    assert "Failed request" not in [
+        item.content for item in model_client.requests[-1].input
+    ]
+
+
+def test_history_stores_only_accepted_cards_and_evicts_after_six_successes() -> None:
+    responses: list[ModelResponse] = []
+    for index in range(7):
+        responses.append(
+            ModelResponse(
+                response_id=f"resp-{index}",
+                output_text=final_output_json(f"answer-{index}"),
+                function_calls=(),
+                usage=ResponseUsage(),
+                status="completed",
+            )
+        )
+    model_client = ScriptedResponsesClient(responses)
+    service, _, sessions = stateful_service_for(model_client)
+
+    for index in range(7):
+        service.chat(ChatRequest(session_id="bounded", message=f"request-{index}"))
+
+    state = sessions.get_state("bounded")
+    assert [turn.user_message for turn in state.history] == [
+        "request-1",
+        "request-2",
+        "request-3",
+        "request-4",
+        "request-5",
+        "request-6",
+    ]
+    assert all(turn.recommended_product_ids == () for turn in state.history)
+
+
+def test_same_session_chat_transactions_do_not_lose_concurrent_updates() -> None:
+    first_entered_client = Event()
+    release_first = Event()
+    second_started = Event()
+    second_entered_client = Event()
+
+    class BlockingClient:
+        def create_response(self, request: ResponseRequest) -> ModelResponse:
+            current_message = request.input[-1].content
+            if current_message == "Set activity":
+                first_entered_client.set()
+                assert release_first.wait(timeout=2)
+                patch = constraint_updates(
+                    activity=TextUpdate(operation="set", value="Hiking")
+                )
+                response_id = "first"
+            else:
+                second_entered_client.set()
+                patch = constraint_updates(
+                    colour=TextUpdate(operation="set", value="Blue")
+                )
+                response_id = "second"
+            return ModelResponse(
+                response_id=response_id,
+                output_text=final_output_json("Done", constraint_updates=patch),
+                function_calls=(),
+                usage=ResponseUsage(),
+                status="completed",
+            )
+
+    commerce = CommerceService(
+        ProductRepository(ROOT / "data" / "products.json"),
+        PromotionRepository(ROOT / "data" / "discounts.json"),
+    )
+    sessions = InMemorySessionRepository()
+    service = ChatService(
+        InMemoryTraceRepository(),
+        AgentOrchestrator(
+            responses_client=BlockingClient(),
+            dispatcher=ToolDispatcher(commerce),
+            model="gpt-5.6-terra",
+            reasoning_effort="low",
+            max_output_tokens=2000,
+        ),
+        RecommendationHydrator(commerce),
+        sessions,
+    )
+
+    def second_turn() -> None:
+        second_started.set()
+        service.chat(ChatRequest(session_id="shared", message="Set colour"))
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(
+            service.chat,
+            ChatRequest(session_id="shared", message="Set activity"),
+        )
+        assert first_entered_client.wait(timeout=2)
+        second = executor.submit(second_turn)
+        assert second_started.wait(timeout=2)
+        assert not second_entered_client.is_set()
+        release_first.set()
+        first.result(timeout=2)
+        second.result(timeout=2)
+
+    state = sessions.get_state("shared")
+    assert state.resolved_constraints.activity == "Hiking"
+    assert state.resolved_constraints.colour == "Blue"
+    assert [turn.user_message for turn in state.history] == [
+        "Set activity",
+        "Set colour",
+    ]
+
+
+def test_historical_cards_need_fresh_current_turn_grounding_in_followups() -> None:
+    model_client = ScriptedResponsesClient(
+        [
+            ModelResponse(
+                response_id="turn-1-tool",
+                output_text="",
+                function_calls=(
+                    FunctionCall(
+                        call_id="turn-1-get",
+                        name="get_product",
+                        arguments_json='{"product_id":"JKT-001"}',
+                    ),
+                ),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+            ModelResponse(
+                response_id="turn-1-final",
+                output_text=final_output_json("First card.", ["JKT-001"]),
+                function_calls=(),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+            ModelResponse(
+                response_id="turn-2-final",
+                output_text=final_output_json(
+                    "I can discuss the prior card.", ["JKT-001"]
+                ),
+                function_calls=(),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+            ModelResponse(
+                response_id="turn-3-tool",
+                output_text="",
+                function_calls=(
+                    FunctionCall(
+                        call_id="turn-3-get",
+                        name="get_product",
+                        arguments_json='{"product_id":"JKT-001"}',
+                    ),
+                ),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+            ModelResponse(
+                response_id="turn-3-final",
+                output_text=final_output_json("Fresh card.", ["JKT-001"]),
+                function_calls=(),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+        ]
+    )
+    service, traces, sessions = stateful_service_for(model_client)
+
+    first = service.chat(ChatRequest(session_id="followup", message="Show JKT-001"))
+    second = service.chat(ChatRequest(session_id="followup", message="What about it?"))
+    third = service.chat(
+        ChatRequest(session_id="followup", message="Show the card again")
+    )
+    second_trace = traces.get(second.trace_id)
+
+    assert [item.product_id for item in first.recommendations] == ["JKT-001"]
+    assert second.recommendations == []
+    assert second_trace is not None
+    assert second_trace.recommendation_validation.validation_errors == [
+        "ungrounded_product_id:JKT-001"
+    ]
+    assert [item.product_id for item in third.recommendations] == ["JKT-001"]
+    assert model_client.requests[2].previous_response_id is None
+    historical_assistant = model_client.requests[2].input[1]
+    assert '"recommended_product_ids":["JKT-001"]' in historical_assistant.content
+    assert sessions.get_state("followup").history[1].recommended_product_ids == ()

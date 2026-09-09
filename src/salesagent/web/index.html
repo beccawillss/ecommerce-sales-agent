@@ -1,0 +1,66 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A conversational outdoor shopping concierge">
+  <link rel="stylesheet" href="/static/app.css">
+  <script src="/static/app.js" defer></script>
+  <title>Sales Agent · Outdoor concierge</title>
+</head>
+<body>
+  <a class="skip-link" href="#main-content">Skip to conversation</a>
+  <header class="site-header">
+    <a class="brand" href="/" aria-label="Sales Agent home">
+      <span class="brand-mark" aria-hidden="true">SA</span>
+      <span><strong>Sales Agent</strong><small>Outdoor concierge</small></span>
+    </a>
+    <button id="new-conversation" class="quiet-button" type="button">New conversation</button>
+  </header>
+
+  <main id="main-content" class="app-shell">
+    <section class="hero" aria-labelledby="page-title">
+      <div>
+        <p class="eyebrow">Find the right kit</p>
+        <h1 id="page-title">Your next adventure starts with a conversation.</h1>
+      </div>
+      <p class="hero-copy">Tell me where you’re going, what the weather looks like, and what matters most. I’ll narrow down the options with you.</p>
+    </section>
+
+    <p class="demo-note">Demo conversations are stored in this server process. If the server restarts, I may need to learn your preferences again; choose New conversation if the context appears lost.</p>
+    <p id="session-note" class="session-note" hidden>Conversation context is retained for this browser tab; earlier messages are not shown after a reload.</p>
+
+    <section class="chat-panel" aria-label="Conversation with Sales Agent">
+      <div id="messages" class="messages" role="log" aria-live="polite" aria-relevant="additions text" aria-busy="false">
+        <section id="welcome" class="welcome-card" aria-labelledby="welcome-title">
+          <div class="welcome-icon" aria-hidden="true">↟</div>
+          <h2 id="welcome-title">What can I help you find?</h2>
+          <p>Start with an activity, a forecast, a budget, or all three.</p>
+          <div class="starter-prompts" aria-label="Starter prompts">
+            <button type="button" data-prompt="I need a waterproof hiking jacket under £160.">Waterproof hiking jacket</button>
+            <button type="button" data-prompt="What lightweight layers would work for a breezy summer walk?">Light summer layers</button>
+            <button type="button" data-prompt="Help me find warm kit for a cold weekend outdoors.">Cold-weather kit</button>
+          </div>
+        </section>
+      </div>
+
+      <div id="request-status" class="request-status" role="status" aria-live="polite"></div>
+      <div id="request-error" class="request-error" role="alert" hidden></div>
+
+      <form id="chat-form" class="composer" novalidate>
+        <label for="message-input">Message Sales Agent</label>
+        <div class="composer-box">
+          <textarea id="message-input" name="message" rows="2" maxlength="4000" placeholder="Tell me what you’re looking for…" required></textarea>
+          <div class="composer-actions">
+            <span id="character-count" class="character-count" aria-live="off">0 / 4000</span>
+            <button id="send-button" class="send-button" type="submit">Send <span aria-hidden="true">→</span></button>
+          </div>
+        </div>
+        <p class="composer-hint">Press Enter to send · Shift+Enter for a new line</p>
+      </form>
+    </section>
+  </main>
+
+  <noscript><p class="noscript-note">JavaScript is required to use the Sales Agent chat demo.</p></noscript>
+</body>
+</html>

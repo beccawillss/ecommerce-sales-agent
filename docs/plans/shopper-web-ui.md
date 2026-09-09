@@ -863,10 +863,12 @@ edit.
 
 #### Outcome
 
-When credentials are available, the actual browser UI completes a three-turn
-OpenAI-backed concierge conversation and presents only structured authoritative
-commerce data. Without credentials, the check is explicitly recorded as not run
-and does not block offline CI.
+Completed and passed in Safari on 2026-09-09. The actual browser UI completed a
+multi-turn OpenAI-backed concierge conversation with backend session continuity
+and presented only structured authoritative commerce data. The final result
+contained recommendation `JKT-003`, a successfully validated `WELCOME10`
+promotion, and deterministic pricing from £110.00 to £99.00 at 10% off on the
+matching product card.
 
 #### Implementation
 
@@ -884,6 +886,20 @@ structured, pricing is on the correct card, link/availability fields match the
 chat JSON, duplicate submission is prevented, and no product/promotion/price
 data is parsed from prose. This check is manual, potentially billable, and must
 never run in CI.
+
+Verified on 2026-09-09: the complete live acceptance path passed:
+
+```text
+browser UI
+    -> POST /api/v1/chat
+    -> multi-turn backend state
+    -> authoritative product grounding
+    -> JKT-003 recommendation
+    -> WELCOME10 validation
+    -> deterministic £110.00 -> £99.00 pricing
+    -> structured product card
+    -> local product page
+```
 
 ## Test plan
 
@@ -982,6 +998,26 @@ Record the browsers/viewports checked in Outcome. If Phase 8 later gains a
 lightweight established JavaScript test setup for another reason, move decoder,
 session, rendering, and state-machine cases into that runner; do not introduce
 one pre-emptively.
+
+Manual browser acceptance completed and passed in Safari on 2026-09-09. The
+shopper UI rendered correctly at `/`; Enter submitted and Shift+Enter inserted a
+new line; duplicate submission protection worked; and backend session
+continuity was retained across a successful multi-turn live conversation. New
+conversation cleared the current browser transcript/session state, and the new
+conversation did not retain prior shopper constraints.
+
+Keyboard navigation and visible focus were usable. The responsive/mobile-width
+layout remained usable without problematic overflow. HTML-shaped shopper input
+rendered as inert plain text and did not execute. A network/server failure
+produced safe recoverable UI copy without internal or OpenAI details, and the
+conversation recovered after the server became available again.
+
+The structured response rendered recommendation `JKT-003` and placed the
+validated `WELCOME10` quote—£110.00 original price, £99.00 final price, 10%
+discount—on that exact product card. Inspection confirmed the card and pricing
+came from structured backend response fields rather than assistant prose. Its
+link opened the correct local read-only product page; an unknown product route
+returned HTTP 404 with `Product not found`.
 
 ### Manual live OpenAI-backed acceptance
 
@@ -1137,12 +1173,50 @@ current deterministic catalogue destinations.
   IDs are accepted as fresh V1 backend sessions without heuristics/probes, and
   authoritative product URLs receive a catalogue-backed read-only local HTML
   route with unknown paths returning 404. No implementation was started.
-- [ ] Milestone 1 — Serve the packaged UI shell.
-- [ ] Milestone 2 — Implement chat and browser session interaction.
-- [ ] Milestone 3 — Render authoritative recommendations and quotes.
-- [ ] Milestone 4 — Complete accessibility, errors, and responsive behavior.
-- [ ] Milestone 5 — Lock API regressions and documentation.
-- [ ] Milestone 6 — Complete or explicitly defer manual live acceptance.
+- [x] 2026-09-07: Milestone 1 — Added the schema-hidden root/static UI shell and
+  exact-path read-only product pages backed by the existing `CommerceService`.
+  All 17 authoritative product URLs return escaped catalogue HTML, unknown and
+  noncanonical paths return 404, HTML responses carry the security-header
+  baseline, and 40 focused UI/health/API tests plus focused Ruff checks passed.
+- [x] 2026-09-07: Milestone 2 — Implemented the dependency-free chat state
+  machine against only `POST /api/v1/chat`: blank/oversize validation,
+  Enter/Shift+Enter behavior, a one-request in-flight guard, ordered safe text
+  bubbles, loading state, explicit non-automatic failure recovery, returned-ID
+  `sessionStorage` continuity, and browser-only New conversation reset. The
+  focused offline UI/API/health suite passed with 41 tests and focused Ruff
+  checks passed; runtime DOM behavior remains assigned to manual acceptance.
+- [x] 2026-09-07: Milestone 3 — Added defensive decoding for every displayed
+  structured field and fail-closed handling for unsafe URLs, duplicate
+  recommendation IDs, unmatched quote targets, and incompatible promotion
+  quotes. Added accessible cards for all availability states and nullable
+  variants, safe authoritative product links, structured promotion status, and
+  exact-`product_id` singular pricing rendered with formatting but no browser
+  discount arithmetic. The prescribed focused suite passed with 65 tests.
+- [x] 2026-09-07: Milestone 4 — Completed semantic live/error regions,
+  persistent accessible failed-turn status, busy/disabled controls, deliberate
+  focus behavior, fixed safe error copy, empty-message fallback, visible focus,
+  touch targets, responsive wrapping, out-of-stock visual treatment, and
+  reduced-motion support. The automated UI/API/health slice passed with 45
+  tests. Interactive browser validation was deferred during implementation and
+  subsequently completed in Safari on 2026-09-09.
+- [x] 2026-09-07: Milestone 5 — Documented Phase 8 in README, confirmed the
+  unchanged generated machine path set and operation IDs, verified every
+  catalogue URL plus known/unknown HTTP route behavior, confirmed frontend
+  secret/provider/trace exclusions, and verified wheel/sdist asset inclusion.
+  `uv sync`, 264 offline tests, Ruff lint/format, strict mypy, application import,
+  and `git diff --check` all passed.
+- [x] 2026-09-07: Milestone 6 was initially deferred because the credentialed
+  live shopper smoke is billable and this execution was instructed not to
+  run billable OpenAI requests. No interactive browser was available for the
+  separate manual offline checklist; a non-billable localhost HTTP smoke passed
+  for the root, assets, health, known/unknown products, and OpenAPI routes.
+- [x] 2026-09-09: Milestone 6 — Manual acceptance completed and passed in
+  Safari. A multi-turn live conversation preserved the backend session,
+  grounded `JKT-003`, validated `WELCOME10`, rendered the deterministic
+  £110.00-to-£99.00 10% quote on the exact structured card, and opened its local
+  read-only product page. Reset, duplicate-submit prevention, safe text
+  rendering, Enter/Shift+Enter, keyboard focus, mobile-width layout, safe
+  failure handling, server recovery, and the unknown-product 404 were verified.
 
 ## Discoveries
 
@@ -1206,6 +1280,31 @@ current deterministic catalogue destinations.
 - The application currently resolves catalogue fixtures from repository root,
   while new UI assets should resolve from the Python package. This matters for
   running from different working directories and requires a wheel-content check.
+- The current catalogue contains 17 distinct `product_url` values. This matters
+  because all current links resolve uniquely, while the presentation helper still
+  fails closed if future input contains an ambiguous duplicate URL.
+- `APIRouter(include_in_schema=False)` applies to both root and product document
+  handlers, and Starlette's static mount is absent from generated paths. This
+  matters because the new presentation surface leaves the existing OpenAPI path
+  set and operation IDs unchanged without per-route schema workarounds.
+- uv's existing build backend includes `src/salesagent/web/**` in both the sdist
+  and wheel without additional configuration. This matters because installed
+  deployments retain the UI assets and Phase 8 needs no packaging override or
+  dependency.
+- Safari exercised the dependency-free UI successfully at desktop and
+  responsive/mobile widths, including Enter/Shift+Enter, visible keyboard focus,
+  duplicate-submit prevention, inert HTML-shaped input, New conversation reset,
+  and recovery after a server/network failure. This confirms the manual
+  behaviors that the Python-only automated suite intentionally cannot execute.
+- The live end-to-end result grounded `JKT-003`, validated `WELCOME10`, and
+  rendered the backend's £110.00 original and £99.00 final prices with the 10%
+  discount on the exact structured recommendation card. This confirms the
+  browser presentation follows structured response fields rather than mining
+  assistant prose or performing pricing arithmetic.
+- The structured `JKT-003` link reached its matching local catalogue-only page,
+  while an unknown path returned HTTP 404 with `Product not found`. This
+  confirms the authoritative URL presentation path works end to end and remains
+  fail-closed for unknown catalogue destinations.
 
 ## Decision log
 
@@ -1376,17 +1475,71 @@ current deterministic catalogue destinations.
 
 ## Outcome
 
-Phase 8 is not implemented yet. This document is the planning-only deliverable
-created on 2026-09-07. No source, test, contract, fixture, dependency, workflow,
-or README behavior was changed.
+Phase 8 implementation completed on 2026-09-07. `src/salesagent/main.py` now
+mounts package-relative static assets and includes a schema-hidden UI router.
+`src/salesagent/web/index.html`, `static/app.css`, and `static/app.js` provide a
+responsive dependency-free chat UI; `src/salesagent/api/routes/ui.py` serves the
+shell and exact, read-only catalogue-backed product pages. `tests/test_ui.py`
+covers routes, packaging-facing assets, HTML escaping, OpenAPI exclusion,
+frontend trust-boundary invariants, session interaction source invariants, and
+structured rendering association. README now documents the shipped behavior.
 
-When implementation completes, replace this section with:
+The browser posts only the exact shopper message and, when known, the backend
+session ID to the existing `/api/v1/chat`. It keeps only that returned ID in
+`sessionStorage` with an in-memory storage-failure fallback. Transcript state is
+DOM-only, one request may be active, failures retain the draft without automatic
+retry, and New conversation clears browser state without a backend mutation.
+Assistant prose is rendered only as text. Recommendations, availability,
+variants, promotion status, and the singular quote are decoded from structured
+fields, rendered with DOM APIs, and rejected as an unexpected response when
+unsafe or ambiguous. Quotes attach only to the unique exact product-ID card;
+JavaScript formats backend amounts but performs no promotion arithmetic.
 
-- the actual files and shopper-visible behavior delivered;
-- route/static/package decisions and any deviations from this plan;
-- automated command results and browser/viewports manually checked;
-- the live OpenAI-backed acceptance result or explicit credential-based deferral;
-- confirmation that the public YAML/OpenAPI chat and trace contracts remained
-  unchanged;
-- remaining limitations, especially process-local sessions and the read-only,
-  non-purchasing product-page boundary.
+All 17 current authoritative `/products/...` URLs resolve to deterministic
+escaped catalogue pages, while unknown, case-changed, nested, or ambiguously
+matched paths return 404. These pages expose no model-authored fact and have no
+cart, checkout, payment, purchase, form, or commerce mutation. Root and product
+HTML use a restrictive CSP, no-referrer policy, and no-sniff header. Dynamic
+browser content uses `textContent`; product links are safe-protocol checked and
+open in a new tab with `noopener noreferrer`. Keyboard semantics, live and alert
+regions, busy/disabled state, visible focus, responsive layout, practical touch
+targets, and reduced-motion styles are present.
+
+Automated validation passed: `uv sync`; `uv run pytest` (264 passed, up from the
+247-test Phase 0-7 baseline); `uv run ruff check .`; `uv run ruff format --check
+.` (63 files formatted); `uv run mypy src` (33 source files); application import
+(`Sales Agent`); and `git diff --check`. The sandbox-safe runs relocated uv's
+cache to `/private/tmp` without changing dependencies or project files. A uv
+wheel/sdist build also confirmed that all three web assets are packaged. A
+non-billable localhost smoke returned 200 for `/`, both assets, `/health`, and a
+known product; 404 for an unknown product; and only `/health`, `/api/v1/chat`,
+and `/api/v1/traces/{trace_id}` in generated OpenAPI. The YAML contract, API
+models, fixtures, dependencies, lockfile, and CI workflow were unchanged.
+
+There were no implementation-scope deviations. Manual Phase 8 acceptance was
+subsequently completed and passed in Safari on 2026-09-09. The shopper UI
+rendered correctly at `/`; Enter and Shift+Enter behaved correctly; duplicate
+submission prevention, visible keyboard focus/navigation, safe inert rendering
+of HTML-shaped shopper input, and a usable overflow-free responsive/mobile-width
+layout were verified. Network/server failure showed a safe recoverable message
+without internal or OpenAI details, and recovery succeeded after the server
+became available again. New conversation cleared the current browser
+conversation/session and the next conversation retained no earlier shopper
+constraints.
+
+The live multi-turn browser path preserved backend session continuity, grounded
+`JKT-003`, validated `WELCOME10`, and rendered deterministic pricing on the
+matching structured card: £110.00 original, £99.00 final, and 10% discount. The
+recommendation and quote matched the backend's structured response rather than
+assistant prose. The product link opened the correct local read-only catalogue
+page, and an unknown product path returned HTTP 404 with `Product not found`.
+Accordingly, the live Phase 8 end-to-end acceptance path passed from browser UI
+through `/api/v1/chat`, multi-turn backend state, authoritative product
+grounding, promotion validation, deterministic pricing, structured card
+rendering, and the local product page.
+
+The accepted V1 limitations remain: backend conversation state is process-local
+and may be lost while a tab retains its ID; the API then treats that ID as a
+fresh session, with no expiry heuristic or hidden probe. A reload retains only
+the ID, not prior bubbles. Product pages are intentionally catalogue-only and
+non-purchasing. No Phase 9 capability was added.

@@ -1,11 +1,15 @@
 # Sales Agent
 
-Sales Agent is an AI-powered sales concierge for a fictional outdoor retailer. Phase 7 uses the OpenAI Responses API to produce a strict final object containing shopper-facing text, up to three nominated catalogue product IDs, one nullable promotion-code nomination, and explicit shopper-constraint updates after calling four validated, read-only commerce tools through a bounded application-owned orchestration loop.
+Sales Agent is an AI-powered sales concierge for a fictional outdoor retailer. Phase 8 adds a plain HTML/CSS/JavaScript shopper experience served by the existing FastAPI process. Its chat uses the unchanged V1 API, and its recommendation cards, promotion status, price quote, and local product links consume only structured authoritative response fields.
+
+The Phase 7 backend uses the OpenAI Responses API to produce a strict final object containing shopper-facing text, up to three nominated catalogue product IDs, one nullable promotion-code nomination, and explicit shopper-constraint updates after calling four validated, read-only commerce tools through a bounded application-owned orchestration loop.
 
 The model can nominate product IDs and a promotion code, and identify explicit constraint changes. It cannot author promotion validity, percentages, product facts, or prices. Application code owns deterministic retain/set/clear merging, current-turn evidence matching, recommendation hydration, and pricing.
 
 ## Current behavior
 
+- `GET /` serves the shopper chat UI and its same-origin static assets. The browser calls only `POST /api/v1/chat`; it never calls OpenAI or the trace endpoint directly.
+- `GET /products/{slug}` resolves only exact existing authoritative `Product.url` paths and renders deterministic catalogue facts. Unknown or noncanonical paths return 404. Product pages are read-only and have no cart, checkout, payment, or purchase action.
 - `GET /health` reports application health without requiring OpenAI configuration.
 - `POST /api/v1/chat` starts a fresh Responses chain for the shopper turn. The backend supplies the session's normalized constraints and up to six successful historical turn pairs, then the model can call `search_products`, `get_product`, `check_inventory`, and `validate_discount` before returning strict prose, nominations, and constraint updates.
 - `GET /api/v1/traces/{trace_id}` returns the in-memory turn trace when evaluation traces are enabled.
@@ -21,6 +25,8 @@ Inactive and unknown promotion codes are HTTP 200 business outcomes with `valid=
 One shopper turn is limited to six Responses calls, eight custom function attempts, and two occurrences of the same canonical tool-and-arguments signature. `previous_response_id` is used only inside that turn; a new `POST /api/v1/chat` starts with no OpenAI conversation state from earlier session turns. The backend instead owns complete normalized constraints and retains only the newest six successful user/assistant pairs plus IDs of cards actually returned. Failed turns consume a trace turn index but do not update constraints or history.
 
 Session state is in memory and isolated to one application process. It is lost on restart or app recreation and is not shared across workers; production multi-worker deployment would require session affinity or separately designed shared persistence. The backend does not retain raw provider responses, reasoning, tool payloads, credentials, or cross-turn response IDs in session state.
+
+The browser retains only the backend-returned `session_id` in `sessionStorage`; rendered messages remain in the page DOM and are not reconstructed after reload. New conversation clears that tab's transcript and stored ID but does not mutate backend state. If the backend process restarts while an ID remains in the tab, the unchanged API accepts it as a fresh session with the same ID. This is an explicit V1 limitation: the UI adds no expiry guess or hidden probe, and New conversation is the shopper's explicit reset.
 
 ## Prerequisites
 
@@ -57,7 +63,7 @@ Start the FastAPI development server:
 uv run uvicorn salesagent.main:app --reload
 ```
 
-The health and V1 API endpoints are available below `http://127.0.0.1:8000/`.
+Open `http://127.0.0.1:8000/` for the shopper UI. Health remains at `/health`, and the unchanged V1 machine endpoints remain under `/api/v1/`. Recommendation links open the catalogue-backed local `/products/...` pages in a new tab.
 
 The continuation loop explicitly stores Responses so it can use `previous_response_id`. Review OpenAI organization data controls and retention requirements before production use. A Zero Data Retention design would require stateless replay and is outside this phase.
 

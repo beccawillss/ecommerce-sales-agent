@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Literal
 
 from fastapi import FastAPI
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 
 from salesagent.agent.orchestrator import AgentOrchestrator
@@ -11,6 +12,7 @@ from salesagent.agent.responses_client import OpenAIResponsesClient, ResponsesCl
 from salesagent.agent.tools.dispatcher import ToolDispatcher
 from salesagent.api.routes.chat import create_chat_router
 from salesagent.api.routes.traces import create_trace_router
+from salesagent.api.routes.ui import create_ui_router
 from salesagent.config import Settings
 from salesagent.repositories.products import ProductRepository
 from salesagent.repositories.promotions import PromotionRepository
@@ -23,6 +25,7 @@ from salesagent.services.pricing import PromotionPricingService
 from salesagent.services.recommendations import RecommendationHydrator
 
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
+WEB_ROOT = Path(__file__).resolve().parent / "web"
 
 
 class HealthResponse(BaseModel):
@@ -81,6 +84,14 @@ def create_app(
     application.state.chat_service = chat_service
     application.state.trace_repository = trace_repository
     application.state.session_repository = session_repository
+    application.mount(
+        "/static",
+        StaticFiles(directory=WEB_ROOT / "static"),
+        name="static",
+    )
+    application.include_router(
+        create_ui_router(commerce_service, index_path=WEB_ROOT / "index.html")
+    )
     application.add_api_route(
         "/health",
         health,

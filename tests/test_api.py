@@ -154,7 +154,7 @@ def test_chat_trace_can_be_retrieved_by_returned_id(client: TestClient) -> None:
     assert trace["turn_index"] == 1
     assert trace["user_message"] == "Keep this safe"
     assert trace["model"] == "gpt-5.6-terra"
-    assert trace["prompt_version"] == "phase7-v1"
+    assert trace["prompt_version"] == "phase7-v2"
     assert trace["resolved_constraints"] == {
         "category": None,
         "activity": None,

@@ -4,7 +4,7 @@ from salesagent.agent.instructions import DEVELOPER_INSTRUCTIONS, PROMPT_VERSION
 
 
 def test_instructions_are_versioned_lean_and_fixture_independent() -> None:
-    assert PROMPT_VERSION == "phase7-v1"
+    assert PROMPT_VERSION == "phase7-v2"
     assert "search_products" in DEVELOPER_INSTRUCTIONS
     assert "check_inventory" in DEVELOPER_INSTRUCTIONS
     assert "authoritative" in DEVELOPER_INSTRUCTIONS
@@ -34,3 +34,19 @@ def test_instructions_are_versioned_lean_and_fixture_independent() -> None:
     assert "JKT-" not in DEVELOPER_INSTRUCTIONS
     assert "WELCOME10" not in DEVELOPER_INSTRUCTIONS
     assert len(DEVELOPER_INSTRUCTIONS) < 4500
+
+
+def test_promotion_nomination_instructions_include_negative_validation_results() -> (
+    None
+):
+    assert (
+        "nominate that returned code in nominated_promotion_code"
+        in DEVELOPER_INSTRUCTIONS
+    )
+    assert "even when valid is false" in DEVELOPER_INSTRUCTIONS
+    assert "inactive or unknown_code" in DEVELOPER_INSTRUCTIONS
+    assert "it does not apply a discount" in DEVELOPER_INSTRUCTIONS
+    assert (
+        "no relevant current-turn validate_discount result is available"
+        in DEVELOPER_INSTRUCTIONS
+    )

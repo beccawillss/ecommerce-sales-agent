@@ -3,6 +3,7 @@
 import json
 from collections.abc import Iterable, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from decimal import Decimal
 from pathlib import Path
 from threading import Event
 
@@ -223,7 +224,7 @@ def test_chat_service_persists_ordered_authoritative_tool_trace() -> None:
     assert trace.session_id == "session-trace"
     assert trace.turn_index == 1
     assert trace.model == "gpt-5.6-terra"
-    assert trace.prompt_version == "phase7-v1"
+    assert trace.prompt_version == "phase7-v2"
     assert trace.token_usage.input_tokens == 18
     assert trace.token_usage.output_tokens == 8
     assert trace.token_usage.total_tokens == 26
@@ -291,7 +292,7 @@ def test_chat_service_persists_safe_failure_trace_before_raising() -> None:
     trace = repository.get(captured.value.trace_id)
     assert trace is not None
     assert trace.model == "gpt-5.6-terra"
-    assert trace.prompt_version == "phase7-v1"
+    assert trace.prompt_version == "phase7-v2"
     assert trace.tool_calls == []
     assert trace.token_usage.total_tokens == 0
     assert trace.errors[-1].code == "openai_unavailable"
@@ -420,16 +421,20 @@ def test_pricing_follows_first_accepted_recommendation_not_raw_or_search_order()
 
 
 @pytest.mark.parametrize(
-    ("code", "valid", "reason"),
+    ("code", "valid", "reason", "percentage"),
     [
-        ("SUMMER20", False, "inactive"),
-        ("STAFF99", False, "unknown_code"),
+        ("WELCOME10", True, "active", 10),
+        ("SUMMER20", False, "inactive", None),
+        ("STAFF99", False, "unknown_code", None),
     ],
 )
-def test_invalid_promotion_is_authoritative_partial_result_without_pricing(
+@pytest.mark.parametrize("nominate", [True, False])
+def test_validated_promotion_nomination_reports_authoritative_result(
     code: str,
     valid: bool,
     reason: str,
+    percentage: int | None,
+    nominate: bool,
 ) -> None:
     model_client = ScriptedResponsesClient(
         [
@@ -437,6 +442,11 @@ def test_invalid_promotion_is_authoritative_partial_result_without_pricing(
                 response_id="resp-discount",
                 output_text="",
                 function_calls=(
+                    FunctionCall(
+                        call_id="call-product",
+                        name="get_product",
+                        arguments_json='{"product_id":"JKT-001"}',
+                    ),
                     FunctionCall(
                         call_id="call-discount",
                         name="validate_discount",
@@ -450,7 +460,8 @@ def test_invalid_promotion_is_authoritative_partial_result_without_pricing(
                 response_id="resp-final",
                 output_text=final_output_json(
                     "The promotion was checked.",
-                    nominated_promotion_code=code,
+                    nominated_product_ids=["JKT-001"],
+                    nominated_promotion_code=code if nominate else None,
                 ),
                 function_calls=(),
                 usage=ResponseUsage(),
@@ -463,15 +474,33 @@ def test_invalid_promotion_is_authoritative_partial_result_without_pricing(
     response = service.chat(ChatRequest(message=f"Can I use {code}?"))
     trace = repository.get(response.trace_id)
 
+    assert [card.product_id for card in response.recommendations] == ["JKT-001"]
+    assert trace is not None
+    assert trace.promotion == response.promotion
+    assert trace.pricing == response.pricing
+    assert all(call.status == "success" for call in trace.tool_calls)
+    if not nominate:
+        assert response.promotion is None
+        assert response.pricing is None
+        assert [error.code for error in trace.errors] == [
+            "promotion_nomination_missing"
+        ]
+        return
+
     assert response.promotion is not None
     assert response.promotion.code == code
     assert response.promotion.valid is valid
     assert response.promotion.reason == reason
-    assert response.promotion.discount_percent is None
-    assert response.pricing is None
-    assert trace is not None
-    assert trace.promotion == response.promotion
-    assert trace.pricing is None
+    assert response.promotion.discount_percent == percentage
+    if valid:
+        assert response.pricing is not None
+        assert response.pricing.product_id == "JKT-001"
+        assert response.pricing.base_price == 145
+        assert response.pricing.final_price == Decimal("130.50")
+        assert response.pricing.discount_code == code
+        assert response.pricing.discount_percent == percentage
+    else:
+        assert response.pricing is None
     assert trace.errors == []
 
 

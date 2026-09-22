@@ -1344,3 +1344,46 @@ card can have a public quote because the contract exposes one `PricingResult`;
 promotion eligibility is global because fixtures define no narrower rules;
 free-form prose is not independently rewritten; and session state remains
 process-local. No Phase 8 work was included.
+
+
+## Post-implementation reliability clarification — 2026-09-22
+
+External evaluation baseline `93b767af4dac`, scenario `sales-summer20`, reported
+successful validation of `SUMMER20` with `valid=false`, null percentage, and
+`reason=inactive`, followed by no final promotion nomination. The response had
+null promotion/pricing and the trace recorded `promotion_nomination_missing`.
+These identifiers record provenance only; no harness scenarios or expectations
+were added to production code or prompts.
+
+Inspection confirmed that the orchestrator retains successful inactive/unknown
+validation evidence and PromotionPricingService returns that authoritative result
+when nominated, with no pricing. A null nomination with evidence deliberately
+fails closed. The old instruction “null promotion nomination when none applies”
+was ambiguous about invalid codes and did not explicitly require reporting them.
+A literally absent required final-output field instead fails schema parsing;
+the reported trace corresponds to a null nomination in the current code.
+
+Decision: make only a developer-instruction clarification and bump PROMPT_VERSION
+from `phase7-v1` to `phase7-v2`. Require nomination of the returned code for a
+shopper-supplied or questioned code even for inactive/unknown results; distinguish
+reporting validation from applying a discount and clarify when null is appropriate.
+Keep validate_discount as promotion authority, PromotionPricingService as the
+resolver/calculator, and all current-turn grounding, schemas, and deterministic
+rules unchanged. No dependencies or harness changes are needed.
+
+Offline coverage extends the scripted chat integration test across active,
+inactive, and unknown results with both nominated and null codes and a grounded
+product. It checks authoritative promotion fields, active pricing, no invalid-code
+pricing, response/trace agreement, and missing-nomination errors. Existing tests
+retain ungrounded-code and cross-turn protections. A prompt regression test records
+the clarified instruction requirements. These tests do not measure live model
+compliance; a future explicitly requested external evaluation must assess that.
+
+Validation completed: `uv run pytest` passed all 269 tests; `uv run ruff check .`,
+`uv run ruff format --check .`, and `uv run mypy src` passed (33 source files).
+The CI application-import check and `git diff --check` also passed. The initial
+full run found five stale `phase7-v1` assertions in API, chat trace, and offline
+smoke tests; those now expect `phase7-v2`, and the complete rerun passed.
+No live OpenAI request was made. No scope deviations occurred.
+The referenced product specification remains absent from this checkout, as recorded
+above; the API contract and existing Phase 7 implementation remain unchanged.

@@ -4,7 +4,7 @@ from salesagent.agent.instructions import DEVELOPER_INSTRUCTIONS, PROMPT_VERSION
 
 
 def test_instructions_are_versioned_lean_and_fixture_independent() -> None:
-    assert PROMPT_VERSION == "phase7-v2"
+    assert PROMPT_VERSION == "phase7-v3"
     assert "search_products" in DEVELOPER_INSTRUCTIONS
     assert "check_inventory" in DEVELOPER_INSTRUCTIONS
     assert "authoritative" in DEVELOPER_INSTRUCTIONS
@@ -33,7 +33,31 @@ def test_instructions_are_versioned_lean_and_fixture_independent() -> None:
     assert "final prices" in DEVELOPER_INSTRUCTIONS
     assert "JKT-" not in DEVELOPER_INSTRUCTIONS
     assert "WELCOME10" not in DEVELOPER_INSTRUCTIONS
-    assert len(DEVELOPER_INSTRUCTIONS) < 4500
+    assert len(DEVELOPER_INSTRUCTIONS) < 5500
+
+
+def test_quote_instructions_preserve_application_pricing_authority() -> None:
+    assert "application appends any authoritative quote" in DEVELOPER_INSTRUCTIONS
+    assert "original price, final price, and promotion" in DEVELOPER_INSTRUCTIONS
+    assert "Never calculate discounted prices yourself" in DEVELOPER_INSTRUCTIONS
+    assert "only communicate application-provided pricing" in DEVELOPER_INSTRUCTIONS
+    assert (
+        "Do not defer quote calculation, confirmation, or promotion application "
+        "to checkout" in DEVELOPER_INSTRUCTIONS
+    )
+    assert "do not invent one or promise a discount" in DEVELOPER_INSTRUCTIONS
+
+
+def test_product_claim_instructions_forbid_unsupported_inferences() -> None:
+    assert (
+        "Ground every product claim and comparison in current-turn authoritative "
+        "evidence" in DEVELOPER_INSTRUCTIONS
+    )
+    assert "Never infer unsupported properties" in DEVELOPER_INSTRUCTIONS
+    assert "lightweight does not imply packable or more packable" in (
+        DEVELOPER_INSTRUCTIONS
+    )
+    assert "absence does not prove the opposite" in DEVELOPER_INSTRUCTIONS
 
 
 def test_promotion_nomination_instructions_include_negative_validation_results() -> (

@@ -146,10 +146,21 @@ class ChatService:
                 TraceErrorEvidence(code=item.code, message=item.message)
                 for item in promotion_pricing.errors
             )
+            message = result.final_text
+            quote = promotion_pricing.pricing
+            if quote is not None:
+                # Pricing already targets the first accepted, hydrated recommendation.
+                product = hydration.recommendations[0]
+                message += (
+                    f"\n\nFor {product.name} ({quote.product_id}), the original price "
+                    f"is £{quote.base_price:.2f}. With {quote.discount_code} "
+                    f"({quote.discount_percent:f}% off), the final price is "
+                    f"£{quote.final_price:.2f}."
+                )
             response = ChatResponse(
                 session_id=session_id,
                 trace_id=trace_id,
-                message=result.final_text,
+                message=message,
                 recommendations=recommendations,
                 promotion=promotion,
                 pricing=pricing,
@@ -177,7 +188,7 @@ class ChatService:
             ).append_turn(
                 ConversationTurn(
                     user_message=request.message,
-                    assistant_message=result.final_text,
+                    assistant_message=response.message,
                     recommended_product_ids=hydration.accepted_product_ids,
                 )
             )

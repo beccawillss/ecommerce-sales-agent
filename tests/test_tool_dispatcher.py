@@ -141,6 +141,24 @@ def test_unknown_product_is_a_predictable_tool_failure(
     assert result.error.code == "product_not_found"
 
 
+def test_lightweight_evidence_does_not_imply_packability(
+    dispatcher: ToolDispatcher,
+) -> None:
+    products = successful_data(
+        dispatcher.dispatch("search_products", {"features": ["lightweight"]})
+    )["products"]
+    catalogue = ProductRepository(PRODUCTS_PATH)
+    for product in products:
+        source = catalogue.get(product["product_id"])
+        assert source is not None
+        details = successful_data(
+            dispatcher.dispatch("get_product", {"product_id": product["product_id"]})
+        )
+        assert product["features"] == details["features"] == list(source.features)
+    assert any("packable" in product["features"] for product in products)
+    assert any("packable" not in product["features"] for product in products)
+
+
 @pytest.mark.parametrize(
     ("product_id", "colour", "size", "stock", "available", "status"),
     [

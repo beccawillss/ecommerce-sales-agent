@@ -126,7 +126,7 @@ def test_success_without_grounded_recommendation_fails_acceptance(
         "turn_3_recommendations,turn_3_validate_discount,"
         "turn_3_active_promotion,turn_3_pricing_consistent\n"
     )
-    assert "turn_1_prompt_version: phase7-v2\n" in captured.out
+    assert "turn_1_prompt_version: phase7-v3\n" in captured.out
     assert "turn_1_tool_count: 1\n" in captured.out
     assert "turn_1_grounded_product_ids: JKT-003\n" in captured.out
     assert "turn_1_changed_fields: \n" in captured.out
@@ -241,7 +241,7 @@ def test_success_prints_only_safe_response_and_trace_summary(
     assert result == 0
     captured = capsys.readouterr()
     assert "model: gpt-5.6-terra\n" in captured.out
-    assert "prompt_version: phase7-v2\n" in captured.out
+    assert "prompt_version: phase7-v3\n" in captured.out
     assert "turn_indices: 1,2,3\n" in captured.out
     assert (
         "turn_1_changed_fields: category,activity,weather,maximum_price\n"

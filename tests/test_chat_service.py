@@ -14,7 +14,7 @@ from salesagent.agent.final_output import (
     MoneyTextUpdate,
     TextUpdate,
 )
-from salesagent.agent.instructions import DEVELOPER_INSTRUCTIONS
+from salesagent.agent.instructions import DEVELOPER_INSTRUCTIONS, PROMPT_VERSION
 from salesagent.agent.orchestrator import AgentOrchestrator
 from salesagent.agent.responses_client import (
     FunctionCall,
@@ -25,7 +25,7 @@ from salesagent.agent.responses_client import (
 )
 from salesagent.agent.tools.dispatcher import ToolDispatcher
 from salesagent.agent.tools.models import ToolExecutionResult
-from salesagent.api.models import ChatRequest
+from salesagent.api.models import ChatRequest, ChatResponse
 from salesagent.domain.models import DiscountValidationResult
 from salesagent.repositories.products import ProductRepository
 from salesagent.repositories.promotions import PromotionRepository
@@ -45,6 +45,19 @@ from salesagent.services.recommendations import (
 from tests.fakes import ScriptedResponsesClient, final_output_json
 
 ROOT = Path(__file__).resolve().parents[1]
+
+
+def assert_authoritative_quote_in_message(response: ChatResponse) -> None:
+    pricing = response.pricing
+    assert pricing is not None
+    quote = response.message.split("\n\n")[-1]
+    assert response.recommendations[0].name in quote
+    assert pricing.product_id in quote
+    assert f"£{pricing.base_price:.2f}" in quote
+    assert f"£{pricing.final_price:.2f}" in quote
+    assert pricing.discount_code in quote
+    assert f"{pricing.discount_percent:f}%" in quote
+    assert "checkout" not in quote.lower()
 
 
 class FailingResponsesClient:
@@ -98,10 +111,12 @@ class FailingPromotionPricingService(PromotionPricingService):
 def service_for(
     model_client: ScriptedResponsesClient,
     pricing_service: PromotionPricingService | None = None,
+    *,
+    promotions_path: Path = ROOT / "data" / "discounts.json",
 ) -> tuple[ChatService, InMemoryTraceRepository]:
     commerce = CommerceService(
         ProductRepository(ROOT / "data" / "products.json"),
-        PromotionRepository(ROOT / "data" / "discounts.json"),
+        PromotionRepository(promotions_path),
     )
     repository = InMemoryTraceRepository()
     orchestrator = AgentOrchestrator(
@@ -224,7 +239,7 @@ def test_chat_service_persists_ordered_authoritative_tool_trace() -> None:
     assert trace.session_id == "session-trace"
     assert trace.turn_index == 1
     assert trace.model == "gpt-5.6-terra"
-    assert trace.prompt_version == "phase7-v2"
+    assert trace.prompt_version == PROMPT_VERSION
     assert trace.token_usage.input_tokens == 18
     assert trace.token_usage.output_tokens == 8
     assert trace.token_usage.total_tokens == 26
@@ -292,7 +307,7 @@ def test_chat_service_persists_safe_failure_trace_before_raising() -> None:
     trace = repository.get(captured.value.trace_id)
     assert trace is not None
     assert trace.model == "gpt-5.6-terra"
-    assert trace.prompt_version == "phase7-v2"
+    assert trace.prompt_version == PROMPT_VERSION
     assert trace.tool_calls == []
     assert trace.token_usage.total_tokens == 0
     assert trace.errors[-1].code == "openai_unavailable"
@@ -418,6 +433,65 @@ def test_pricing_follows_first_accepted_recommendation_not_raw_or_search_order()
     assert trace.promotion == response.promotion
     assert trace.pricing == response.pricing
     assert trace.pricing.product_id == trace.recommended_product_ids[0]
+    assert_authoritative_quote_in_message(response)
+    assert "£145.00" not in response.message
+
+
+def test_quote_uses_arbitrary_canonical_promotion_and_decimal_price(
+    tmp_path: Path,
+) -> None:
+    promotions_path = tmp_path / "promotions.json"
+    promotions_path.write_text(
+        json.dumps(
+            {
+                "promotions": [
+                    {"code": "TRAIL125", "discount_percent": "12.5", "active": True}
+                ]
+            }
+        )
+    )
+    model_client = ScriptedResponsesClient(
+        [
+            ModelResponse(
+                response_id="tools",
+                output_text="",
+                function_calls=(
+                    FunctionCall(
+                        call_id="product",
+                        name="get_product",
+                        arguments_json='{"product_id":"JKT-005"}',
+                    ),
+                    FunctionCall(
+                        call_id="promotion",
+                        name="validate_discount",
+                        arguments_json='{"code":"trail125"}',
+                    ),
+                ),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+            ModelResponse(
+                response_id="final",
+                output_text=final_output_json(
+                    "Here is the verified option.",
+                    ["JKT-005"],
+                    nominated_promotion_code="trail125",
+                ),
+                function_calls=(),
+                usage=ResponseUsage(),
+                status="completed",
+            ),
+        ]
+    )
+    service, _ = service_for(model_client, promotions_path=promotions_path)
+    response = service.chat(ChatRequest(message="Use trail125 on this wind shell."))
+
+    assert_authoritative_quote_in_message(response)
+    assert "£85.00" in response.message
+    assert "£74.37" in response.message
+    assert "TRAIL125" in response.message
+    assert "12.5%" in response.message
+    assert len(model_client.requests) == 2
 
 
 @pytest.mark.parametrize(
@@ -482,6 +556,7 @@ def test_validated_promotion_nomination_reports_authoritative_result(
     if not nominate:
         assert response.promotion is None
         assert response.pricing is None
+        assert response.message == "The promotion was checked."
         assert [error.code for error in trace.errors] == [
             "promotion_nomination_missing"
         ]
@@ -499,8 +574,10 @@ def test_validated_promotion_nomination_reports_authoritative_result(
         assert response.pricing.final_price == Decimal("130.50")
         assert response.pricing.discount_code == code
         assert response.pricing.discount_percent == percentage
+        assert_authoritative_quote_in_message(response)
     else:
         assert response.pricing is None
+        assert response.message == "The promotion was checked."
     assert trace.errors == []
 
 
@@ -601,6 +678,7 @@ def test_pricing_calculation_failure_preserves_promotion_and_redacts_trace() -> 
     assert response.promotion is not None
     assert response.promotion.code == "WELCOME10"
     assert response.pricing is None
+    assert response.message == "A safe partial result remains available."
     assert trace is not None
     assert trace.promotion == response.promotion
     assert trace.pricing is None
@@ -1111,7 +1189,7 @@ def test_followup_pricing_requires_fresh_product_and_promotion_evidence() -> Non
             ),
         ]
     )
-    service, traces, _ = stateful_service_for(model_client)
+    service, traces, sessions = stateful_service_for(model_client)
 
     first = service.chat(ChatRequest(session_id="priced-followup", message="Show it"))
     second = service.chat(
@@ -1131,6 +1209,13 @@ def test_followup_pricing_requires_fresh_product_and_promotion_evidence() -> Non
     assert second.pricing is not None
     assert second.pricing.product_id == "JKT-001"
     assert second.pricing.final_price == 130.5
+    assert_authoritative_quote_in_message(second)
+    assert first.message == "First card."
+    assert third.message == "The prior code is only historical context."
+    assert fourth.message == "The product still needs a current-turn refresh."
+    assert sessions.get_state("priced-followup").history[1].assistant_message == (
+        second.message
+    )
     assert [item.product_id for item in third.recommendations] == ["JKT-001"]
     assert third.promotion is None
     assert third.pricing is None
